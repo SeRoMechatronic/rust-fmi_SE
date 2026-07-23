@@ -1,0 +1,61 @@
+=== Concepts [[concepts-scheduled-execution]]
+
+==== Activating Model Partitions
+
+In Scheduled Execution the importer has to ensure that model partitions are scheduled according to their activation time and priorities.
+This is realized in <<ClockActivationMode>> by calling <<fmi3ActivateModelPartition>> triggering their respective Clocks.
+
+The FMU may request to schedule another model partition even while currently a model partition is being executed.
+
+In case more than one Clock ticks at the same time instant, the scheduler needs a priority to define the activation sequence of the associated model partitions.
+This ordering is defined by the <<priority>> attributes of the Clock.
+For Scheduled Execution this attribute is mandatory for every Clock.
+
+_[The Clock priorities are local to an FMU._
+_It is not possible for an FMU exporting tool to know in advance the priorities of other FMUs that will be connected to an FMU in a simulation setup._
+_It is the responsibility of the importer to derive a computational order for the computation of two or more distinct FMUs based on the local FMU Clock priorities and input-output relationships of connected FMUs.]_
+
+_[For <<periodic-clock, `periodic Clocks`>> it is recommended to derive the priorities based on a rate monotonic scheduling scheme (smallest period leads to highest priority, that is, has the smallest priority value.]_
+
+==== Preemption Support [[preemption-support]]
+
+If a model partition of lower <<priority>> is executed when a model partition of higher priority is activated, the scheduler must ensure that the execution of the latter one is not delayed and causing violations of timing constraints.
+_[On a real-time simulator a violation of a timing constraint usually results in an overrun exception i.e. a model partition is supposed to be executed when an instance of the same model partition has not yet finished its execution.]_
+
+Preemption support means that the scheduler can immediately interrupt the current execution of a model partition in order to execute a model partition of higher priority.
+The computation of the interrupted model partition is proceeded afterwards.
+So by regarding priorities and supporting preemption the scheduler can ensure that most critical model partitions are never delayed by less important model parts.
+_[This is particularly important for real-time simulators as the wall clock time is dictating the time for the next execution.]_
+
+* Same <<priority>>: The scheduler does not preempt the execution of a model partition in favor of a model partition of the same priority.
+For model partitions with the same priority, the scheduler decides the execution order, e.g. based on configurations in the importer.
+* Different priorities: The scheduler preempts the execution of a model partition of a lower priority as soon as a model partition of higher priority partition needs to be computed.
+
+An example for scheduling based on priorities and preempting model partitions is given in section <<example-scheduled-execution>>.
+
+It may be important for the FMU to secure particular sections of its code against being preempted.
+Callback functions <<preemption-support,`fmi3LockPreemptionCallback`>> and <<preemption-support,`fmi3UnlockPreemptionCallback`>> are provided by the importer when instantiating the FMU via <<fmi3InstantiateScheduledExecution>> to allow the FMU to signal entering and exiting such critical code sections.
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=CallbackPreemptionLock]
+----
+
+The FMU's code has to be prepared to correctly handle preemption of
+
+* <<fmi3ActivateModelPartition>>,
+* <<get-and-set-variable-values,`fmi3Get{VariableType}`>>,
+* <<get-and-set-variable-values,`fmi3Set{VariableType}`>>,
+* <<fmi3GetClock>>
+* and <<fmi3GetIntervalDecimal>>.
+
+In general this means that the FMU's code has to secure access to its global states and variables wherever data inconsistencies due to potential preemptions are anticipated.
+
+_[Note that depending on their implementation, <<preemption-support,`fmi3CallbackLockPreemption`>> and <<preemption-support,`fmi3CallbackUnlockPreemption`>> have a non-negligible overhead, as well as a strong impact on the scheduler and therefore their use should be as rare and short as possible._
+_In general it is recommended to reduce dependencies between different model partitions of one FMU by design._
+_In particular a unique assignment of the respective variables to model partitions via its associated <<Clock>> is strongly recommended._
+
+_One may also consider if the code can be preempted by other parts of the same FMU:_
+_E.g. a model partition cannot be interrupted if it is the only model partition or if it holds the highest priority._
+_Similarly, a model partition, while it might be interrupted, might not need to guard data accesses if it is the only model partition of the FMU, or the one with the highest priority._
+_In such cases no locks may be necessary.]_

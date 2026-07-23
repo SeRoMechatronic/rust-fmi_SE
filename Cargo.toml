@@ -1,0 +1,15 @@
+[package]
+name = "motor_termico"
+version = "0.1.0"
+edition = "2021"
+description = "Modelo termico del motor (calienta con la carga) FMI 3.0 Rust"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+fmi        = { path = "../rust-fmi/fmi",        features = ["fmi3"], default-features = false }
+fmi-export = { path = "../rust-fmi/fmi-export", features = ["fmi3"] }
+
+[package.metadata.fmu]
+default_experiment = { start_time = "0", stop_time = "30", step_size = "0.02" }

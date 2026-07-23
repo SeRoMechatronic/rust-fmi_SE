@@ -1,0 +1,68 @@
+=== Description Schema [[co-simulation-schema]]
+
+XML elements and attributes common to all interface types are defined in <<modelDescription.xml,FMI Description Schema>>.
+Additional elements and attributes are defined subsequently.
+If the FMU implements the Co-Simulation interface type, the element `<CoSimulation>` must be present.
+It is defined as:
+
+.CoSimulation element.
+[[figure-schema-CoSimulation]]
+image::images/schema/CoSimulation.png[width=80%, align="center"]
+
+The attributes in the following table are defined in addition to the <<common-capability-flags, common attributes>> and have the following meaning (all attributes are optional with the exception of <<modelIdentifier>>):
+
+.CoSimulation attribute details.
+[[table-CoSimulation-details]]
+[cols="4,6",options="header"]
+|====
+|Attribute
+|Description
+
+|`canHandleVariableCommunicationStepSize`
+|[[canHandleVariableCommunicationStepSize,`canHandleVariableCommunicationStepSize`]]If `canHandleVariableCommunicationStepSize = true`, then the communication step size (argument <<communicationStepSize>> of <<fmi3DoStep>>) can vary for each call.
+
+|`fixedInternalStepSize`
+|[[fixedInternalStepSize,`fixedInternalStepSize`]]If the FMU has a fixed internal step size, this optional attribute communicates it. +
+_[This information can be used by the importer to synchronize the communication interval with that fixed internal step size of the FMU._
+_The importer should use an integer multiple of this value as <<communicationStepSize,communication step size>>.]_
+
+|`maxOutputDerivativeOrder`
+|[[maxOutputDerivativeOrder,`maxOutputDerivativeOrder`]]The FMU is able to provide <<derivative,`derivatives`>> of <<output,`outputs`>> up to the order of `maxOutputDerivativeOrder`.
+Calling of `fmi3GetOutputDerivatives` is allowed up to the order defined by `maxOutputDerivativeOrder`.
+
+|`recommendedIntermediateInputSmoothness`
+|[[recommendedIntermediateInputSmoothness,`recommendedIntermediateInputSmoothness`]]A value of latexmath:[k] with latexmath:[k>0] signals to the importer, that it is beneficial for the solver within the FMU to receive intermediate inputs that are latexmath:[k]-time continuously differentiable (latexmath:[C^k]) on the current communication interval.
+latexmath:[k = 0] means continuous (see <<smoothness>>).
+
+|`providesIntermediateUpdate`
+|[[providesIntermediateUpdate,`providesIntermediateUpdate`]]The FMU supports <<IntermediateUpdateMode>> and will call <<fmi3IntermediateUpdateCallback>>, if provided.
+
+|`mightReturnEarlyFromDoStep`
+|[[mightReturnEarlyFromDoStep,`mightReturnEarlyFromDoStep`]]The FMU announces that it might <<earlyReturn,return early>> from <<fmi3DoStep>>.
+If this flag is `false`, the importer can assume that the FMU computes the <<fmi3DoStep>> as instructed up until <<currentCommunicationPoint>> + <<communicationStepSize>>.
+
+|`canReturnEarlyAfterIntermediateUpdate`
+|[[canReturnEarlyAfterIntermediateUpdate,`canReturnEarlyAfterIntermediateUpdate`]]If `true`, the FMU is able to return early from <<fmi3DoStep>> if the importer returns <<earlyReturnRequested,`earlyReturnRequested = fmi3True`>> from the callback <<intermediateUpdate>>.
+`canReturnEarlyAfterIntermediateUpdate` may only be `true`, if <<providesIntermediateUpdate>> is `true`.
+
+|`hasEventMode`
+|[[hasEventMode,`hasEventMode`]]If `true` the FMU supports <<EventMode>>. +
+If the importer does not support <<EventMode>>, then it must call <<fmi3InstantiateCoSimulation>> with <<eventModeUsed,`eventModeUsed = fmi3False`>> to force the FMU to detect and handle events internally. +
+If `eventModeUsed = fmi3True`, the importer must actively trigger event handling at communication points in the FMU using <<fmi3EnterEventModeCS>>. +
+If the FMU has clocks, then <<hasEventMode>> must be `true`.
+
+|====
+
+==== Example Model Description File
+
+===== Example Model Description File with Early Return [[xml-example-co-simulation]]
+
+The <<xml-example-fmimodeldescription-cosimulation>> below is the same as shown in <<xml-example-model-exchange>> for a Model Exchange FMU.
+The only differences are the replacement of the element `<ModelExchange>` with the element `<CoSimulation>` with additional Co-Simulation-specific attributes, and the removal of <<local>> variables, which are associated with continuous <<state,states>> and their <<derivative,`derivatives`>>.
+
+.Example `<fmiModelDescription>`
+[#xml-example-fmimodeldescription-cosimulation]
+[source, xml]
+----
+include::examples/co_simulation_early_return.xml[]
+----

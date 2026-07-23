@@ -1,0 +1,30 @@
+= Layered Standard for Network Communication
+:doctype: book
+:imagesdir: images
+:sectnums:
+:sectnumlevels: 5
+:toc: left
+:toc-title: Contents
+:toclevels: 5
+:xrefstyle: short
+:docinfo: shared
+:stylesheet: fmi-spec.css
+:stem: latexmath
+:source-highlighter: highlightjs
+:nofooter:
+:favicon: images/favicon.ico
+:icons: font
+:revdate: unreleased
+:revnumber: 1.1.0-beta.1
+
+include::0____preamble.adoc[]
+
+include::1____introduction.adoc[]
+
+include::2____common_concepts.adoc[]
+
+include::3____physical_signal_abstraction.adoc[]
+
+include::4____network_abstraction.adoc[]
+
+include::5____additional_content.adoc[]

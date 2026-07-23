@@ -1,0 +1,1332 @@
+=== General Mechanisms [[general-mechanisms]]
+
+==== Requirements for Implementations of the C-API
+
+The following general requirements for implementations of FMUs and importers must be followed:
+
+* FMI functions of one instance are not required to be thread-safe. +
+_[For example, if the functions of one instance of an FMU are accessed from more than one thread;
+the multi-threaded simulation environment that uses the FMU must guarantee that there are no race conditions while invoking the FMI functions.
+The FMU itself does not implement any services to support this.]_
+
+* The following FMI callback functions must not call back into the FMU:
+ ** <<logMessage,`fmi3LogMessageCallback`>>, and
+ ** <<preemption-support,`fmi3LockPreemptionCallback`>>, and
+ ** <<preemption-support,`fmi3UnlockPreemptionCallback`>>).
+
++
+The following callback functions lead to well-defined states and may call FMI functions according to their respective state definitions:
+ ** <<intermediateUpdate,`fmi3IntermediateUpdateCallback`>>, and
+ ** <<fmi3ClockUpdateCallback>>.
+
+* FMI functions must not change global settings which affect other processes/threads.
+An FMI function may change settings of the thread in which it is called (such as floating point control registers), provided these changes are restored before leaving the function or before a callback function is called.
+To prepare the FMU code to run reliably on <<preemption-support, preemptive systems>> FMI functions must not change global settings. +
+_[This property ensures that functions of different FMU instances can be called safely in any order._
+_Additionally, they can be called in parallel provided the functions are called in different processes._
+_If an FMI function changes, for example, the floating point control word of the CPU, it must restore the previous value before return of the function.]_
+
+* FMI function arguments must not to be `NULL`, unless explicitly allowed by the standard document where `NULL` will be assigned a specific semantic. +
+_[For an example of `NULL` being explicitly allowed see <<resourcePath>>._
+_Defensive implementations should still guard against `NULL` pointers.]_
+
+* The FMI Standard does not provide a runtime platform or portability layer.
+Access to operating system resources and services, such as memory, network or file system, should be implemented with special care because the availability of such resources and services is not guaranteed on every target platform and/or simulator.
+If some resource is required by the FMU but is not available, the FMU must log what resource failed and return with error.
+
+==== Header Files and Naming of Functions [[header-files-and-naming-of-functions]]
+
+The FMI C-API is defined by three C99 header files.
+By convention, all function declarations and type definitions in these header files have the prefix `fmi3`.
+
+`fmi3PlatformTypes.h`::
+contains the type definitions of the input and output arguments of the functions as well as some C preprocessor macro definitions for constants.
+This header file must be used both by the FMU and by the importer. +
+_[Example of a definition in this header file:_
++
+[source, C]
+----
+include::../headers/fmi3PlatformTypes.h[tags=fmi3Float64]
+----
++
+_]_
+
+`fmi3FunctionTypes.h`::
+contains `typedef` definitions of all function prototypes of an FMU as well as enumerations for constants.
+This header file includes `fmi3PlatformTypes.h`.
+When dynamically loading an FMU, these definitions can be used to type-cast the function pointers to the respective function definition.
+For simplicity, the function type for each function is composed of the function name itself with the suffix `TYPE`. +
+_[Example of a definition in this header file:_
++
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=SetTime]
+----
++
+_]_
+
+`fmi3Functions.h`::
+contains the function prototypes of an FMU that may be accessed in simulation environments.
++
+This header file includes `fmi3PlatformTypes.h` and `fmi3FunctionTypes.h`.
+The header file version number for which the model was compiled, may be inquired by the importer with <<fmi3GetVersion>>. +
++
+_[Example of a definition in this header file:_
++
+[source, C]
+----
+include::../headers/fmi3Functions.h[tags=SetTimeTYPE]
+----
++
+_For Microsoft and Cygwin compilers `FMI3_Export` is defined as_ `pass:[__]declspec(dllexport)` _and for Gnu-Compilers as_ `pass:[__]attribute__ ( ( visibility("default") ) )` _in order to export the name for dynamic loading._
+_Otherwise it is an empty definition.]_
+
+The goal is that both source code and binary representations of FMUs are supported and that several FMUs might be present at the same time in an executable (for example, FMU A may use an FMU B).
+In order for this to be possible, the names of the functions in different FMUs must be different, or function pointers must be used.
+To support the source code representation of FMUs, macros are provided in `fmi3Functions.h` to build the actual function names by using a function prefix that depends on how the FMU is shipped (shared object or static library).
+
+_[These macros can be defined differently in a target specific variant of `fmi3Functions.h` to adjust them to the requirements of the supported compilers and platforms of the importer, e.g. one can remove the use of the `FMI3_FUNCTION_PREFIX` macro in the `fmi3Function.h` file of the importer to compile function names without prefix for building shared objects (DLL/SO).]_
+
+When compiling an FMU C-file the macro `FMI3_FUNCTION_PREFIX` must be defined before the `#include <fmi3Functions.h>` or on precompiler level with the same value as the value of the <<modelIdentifier>> attribute defined in `<fmiModelDescription><ModelExchange>`, `<fmiModelDescription><CoSimulation>`, and `<fmiModelDescription><ScheduledExecution>` together with `pass:[_]` at the end (see <<model-exchange-schema>>, <<co-simulation-schema>>, <<scheduled-execution-schema>>).
+
+Typically, FMU functions are used as follows:
+
+[source, C]
+----
+// FMU is shipped with C source code, or with static link library
+#define FMI3_FUNCTION_PREFIX MyModel_
+#include <fmi3Functions.h>
+< usage of the FMU functions e.g. MyModel_fmi3SetTime >
+
+// FMU is shipped with DLL/SharedObject
+#include <fmi3FunctionTypes.h>
+fmi3SetTimeTYPE *myname_setTime = < load symbol "fmi3SetTime" from DLL/SharedObject >;
+< usage of the FMU function pointers, e.g. myname_setTime >
+----
+
+A function that is defined as `fmi3GetFloat64` is changed by the macros to a function name as follows:
+
+- If the FMU is shipped with C source code or with static link library: +
+The constructed function name is `MyModel_fmi3GetFloat64`.
+In other words, the function name is prefixed with the model name and an `pass:[_]`.
+A simulation environment may therefore construct the relevant function names by generating code for the actual function call.
+In case of a static link library, the name of the library must be `MyModel.lib` on Windows and `libMyModel.a` on Linux; in other words the <<modelIdentifier>> attribute is used to create the library name.
+
+- If the FMU is shipped with DLL/SharedObject: +
+The constructed function name is `fmi3GetFloat64`, in other words, it is not changed.
+_[This can be realized in the case of a source code FMU with a target-specific version of `fmi3Functions.h` that does not use FMI3_FUNCTION_PREFIX to construct the function names._
+_Using the standard-supplied version of `fmi3Functions.h`, the same effect can be achieved by defining the `FMI3_OVERRIDE_FUNCTION_PREFIX` precompiler macro prior to the inclusion of the `fmi3Functions.h` header, for example using precompiler command-line flags.]_
+A simulation environment dynamically loads this library and explicitly imports the function pointers by providing the FMI function names as strings.
+The name of the library must be `MyModel.dll` on Windows or `MyModel.so` on Linux; in other words the <<modelIdentifier>> attribute is used as library name.
+
+Since <<modelIdentifier>> may be used as prefix of a C-function name it must fulfill the restrictions on C-function
+names (only letters, digits and/or underscores are allowed).
+_[For example, if `modelName = "A.B.C"`, then <<modelIdentifier>> might be "A_B_C".]_
+Since <<modelIdentifier>> is also used as name in a file system, it must also fulfill the restrictions of the targeted operating system.
+Basically, this means that it should be short.
+These restrictions apply to all interface types and for binary and source-code FMUs.
+_[For example, the Windows API only supports full path-names of a file up to 260 characters (see: https://msdn.microsoft.com/en-us/library/aa365247%28VS.85%29.aspx).]_
+
+==== Platform Dependent Definitions
+
+To simplify porting, no C types are used in the function interfaces, but the alias types are defined in this section.
+All definitions in this section are provided in the header file `fmi3PlatformTypes.h`.
+This definition must be used by binary FMUs.
+
+[source, C]
+----
+include::../headers/fmi3PlatformTypes.h[tags=Component]
+----
+
+This is a pointer to an FMU specific data structure that contains the information needed to process the model/subsystem represented by the FMU.
+
+[source, C]
+----
+include::../headers/fmi3PlatformTypes.h[tags=ComponentEnvironment]
+----
+
+This is a pointer to a data structure in the importer.
+Using this pointer, data may be transferred between the importer and callback functions the importer provides with the <<FMUStateSettable,instantiation functions>>.
+
+[source, C]
+----
+include::../headers/fmi3PlatformTypes.h[tags=FMUState]
+----
+
+This is a pointer to a data structure in the FMU that stores the internal FMU state of the current or a previously stored time instant.
+This allows to restart a simulation from a previously stored FMU state (see <<get-set-fmu-state>>).
+
+[source, C]
+----
+include::../headers/fmi3PlatformTypes.h[tags=ValueReference]
+----
+
+[[fmi3ValueReference,`fmi3ValueReference`]]
+This is a handle to access a variable of the model via the C-API.
+An <<fmi3ValueReference>> uniquely identifies the value and other properties of a variable, except for the variable name and the display unit that may differ for <<alias>> variable definitions.
+All <<fmi3ValueReference>> are defined in the <<modelDescription.xml>> as attribute <<valueReference>> for each variable.
+
+Structured entities exposed by an FMU must be flattened into a set of values (scalars or arrays) of type `fmi3Float64`, `fmi3Int32`, etc.
+Semantic relations may be expressed using <<namingSection,naming conventions>>.
+Arrays may be flattened into a set of scalars or represented directly as <<Dimension,array>>.
+An <<fmi3ValueReference>> references one such value (scalar or array).
+
+The following listing shows the base types used in the FMI C-API:
+
+.Base types
+[[code-base-types]]
+[source, C]
+----
+include::../headers/fmi3PlatformTypes.h[tags=VariableTypes]
+----
+
+==== Status Returned by Functions [[status-returned-by-functions]]
+
+This section defines the return values the C-API functions indicating success or failure of the function call.
+It is defined in file `fmi3FunctionTypes.h` as an enumeration of type `fmi3Status`:
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=Status]
+----
+
+The status values have the following meaning:
+
+[[fmi3OK,`fmi3OK`]]
+`fmi3OK`::
+The call was successful.
+The output argument values are defined.
+
+[[fmi3Warning,`fmi3Warning`]]
+`fmi3Warning`::
+A non-critical problem was detected, but the computation may continue.
+The output argument values are defined.
+Function <<logMessage>> should be called by the FMU with further information before returning this status, respecting the current logging settings. +
+_[In certain applications, e.g. in a prototyping environment, warnings may be acceptable._
+_For production environments warnings should be treated like errors unless they can be safely ignored.]_
+
+[[fmi3Discard,`fmi3Discard`]]
+`fmi3Discard`::
+The call was not successful and the FMU is in the same state as before the call.
+The output argument values are undefined, but the computation may continue.
+Function <<logMessage>> should be called by the FMU with further information before returning this status, respecting the current logging settings.
+Advanced importers may try alternative approaches to continue the simulation by calling the function with different arguments or calling another function - except in FMI for Scheduled Execution where repeating failed function calls is not allowed.
+Otherwise the simulation algorithm must treat this return code like <<fmi3Error>> and must terminate the simulation. +
+_[Examples for usage of <<fmi3Discard>> are_
+ * _handling of <<min-max-violations,min/max violation>>, or_
+ * _signal numerical problems during model evaluation forcing smaller step sizes.]_
+
+[[fmi3Error,`fmi3Error`]]
+`fmi3Error`::
+The call failed.
+The output argument values are undefined and the simulation must not be continued.
+Function <<logMessage>> should be called by the FMU with further information before returning this status, respecting the current logging settings.
+If a function returns <<fmi3Error>>, it is possible to restore a previously retrieved FMU state by calling <<fmi3SetFMUState>>.
+Otherwise <<fmi3FreeInstance>> or <<fmi3Reset>> must be called.
+When detecting illegal arguments or a function call not allowed in the current state according to the respective state machine, the FMU must return <<fmi3Error>>.
+Other instances of this FMU are not affected by the error. +
+_[For example, when setting a constant with a call to <<get-and-set-variable-values,`fmi3Set{VariableType}`>>, then the function must return with an error (<<fmi3Error,`fmi3Status = fmi3Error`>>.]_
+
+[[fmi3Fatal,`fmi3Fatal`]]
+`fmi3Fatal`::
+The state of all instances of the model is irreparably corrupted.
+_[For example, due to a runtime exception such as access violation or integer division by zero during the execution of an FMI function.]_
+Function <<logMessage>> should be called by the FMU with further information before returning this status, respecting the current logging settings, if still possible.
+The importer must not call any other function for any instance of the FMU.
+
+==== Inquire Version Number of Header Files [[inquire-version-number]]
+
+[[fmi3GetVersion,`fmi3GetVersion`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=GetVersion]
+----
+
+This function returns `fmi3Version` of the `fmi3Functions.h` header file which was used to compile the functions of the FMU.
+This function call is allowed always and in all interface types.
+
+The standard header file as documented in this specification has version `3.0`, so this function returns `3.0`.
+
+==== Advancing Time [[advancing-time]]
+
+This section highlights the differences of the concept of time (in general the independent variable) for the three different FMI types, ME, CS and SE.
+The FMI type defines which functions drive the time in the simulation.
+
+The initial value of the independent variable is the value of the argument <<startTime>> of <<fmi3EnterInitializationMode>>.
+
+In Model Exchange, time is under the sole control of the <<importer>> and its integration algorithm.
+The model itself receives the current time to be used in its computation with <<fmi3SetTime>>.
+Time is not necessarily always advancing as solvers might need to jump back and forth in time, for example, to localize events using <<eventIndicator, event indicators>>.
+
+In Co-Simulation, time advances in (possibly variable) steps negotiated between the co-simulation algorithm of the importer and the FMU.
+The importer calls <<fmi3DoStep>> with the <<currentCommunicationPoint>> and a target <<communicationStepSize>> (required to be larger than 0.0).
+During this <<fmi3DoStep>>, both importer and FMU might encounter events (or other situations) that require reduction of the <<communicationStepSize>> (potentially even down to 0.0).
+The FMU may use the return argument <<earlyReturn>> of the <<fmi3DoStep>> function to tell the importer that the FMU returned earlier than requested.
+The importer may use the return argument <<earlyReturnRequested>> of the callback <<fmi3IntermediateUpdateCallback>> to signal the FMU to return early from the current <<fmi3DoStep>>.
+The output argument <<lastSuccessfulTime>> of <<fmi3DoStep>> allows the FMU to signal the importer its current internal time.
+
+In Scheduled Execution, just like in Model Exchange, time is under the sole control of the importer i.e. its scheduler.
+By scheduling the exposed <<model-partition, model partitions>> of an FMU and executing them for dedicated points in time it is the scheduler that defines how time progresses.
+These points in time are <<event,events>> defined by time-based or triggered <<Clock,Clocks>>.
+The time itself is communicated to the FMU as <<activationTime>> argument of <<fmi3ActivateModelPartition>>.
+
+_[Examples for Scheduled Execution:_
+
+* _A simple scheduler calls the model partitions of periods 5 ms and 10 ms of an FMU in a loop._
+_The latter one is activated only every second loop iteration._
+_Thus the time of the simulation advances discretely by 5 ms in every step of the loop._
+* _A scheduler of a real-time simulator activates the model partitions whenever wall-clock time has progressed for 5 ms or 10 ms.]_
+
+==== Variables [[fmu-variables]]
+
+FMU and importer use variables to exchange information.
+All variables are listed in <<modelDescription.xml>> as elements of `<fmiModelDescription><ModelVariables>`.
+
+They are identified with a unique handle called <<valueReference, value reference>>.
+
+The attribute <<causality>> defines the direction of the information flow with respect to the FMU (e.g. <<input>>, <<output>>, <<parameter>>).
+
+Variables, except Clocks, may be scalar or multi-dimensional arrays.
+Clocks must always be scalar.
+
+===== Serialization of Array Variables [[serialization-of-variables]]
+
+Array variables in C-API and <<modelDescription.xml>> (i.e. <<start>> attribute) are serialized as row major.
+The order of dimensions is defined as follows:
+
+ * For the C-language it is defined from left to right (e.g. `array[dim1][dim2]...[dimN]`).
+ * In <<modelDescription.xml>> it is defined by the order of the <<Dimension>> elements.
+
+_[Example: A 2D matrix_
+[latexmath]
+++++
+A = \left( \begin{array}{cc} a_{11}&a_{12}\\
+                             a_{21}&a_{22}\\
+                             a_{31}&a_{32}\\
+            \end{array} \right)
+++++
+_is serialized as follows:_
+[frame="none",grid="none"]
+|========================================
+|_A[0][0]=a11_ | _memory  address: A_   |
+|_A[0][1]=a12_ | _memory  address: A+1_ |
+|_A[1][0]=a21_ | _memory  address: A+2_ |
+|_A[1][1]=a22_ | _memory  address: A+3_ |
+|_A[2][0]=a31_ | _memory  address: A+4_ |
+|_A[2][1]=a32_ | _memory  address: A+5_ |
+|========================================
+
+Corresponding definition in C:
+[source, C]
+----
+include::examples/snippets.c[tags=structuralParameterExample]
+----
+
+Corresponding <<ModelVariables>> definition in <<modelDescription.xml>>:
+[source, xml]
+----
+include::examples/structural_parameter_example.xml[tags=structuralParameterExample]
+----
+
+_]_
+
+For this serialization of array variables the sparsity pattern of the array is not taken into account.
+All elements of the array, including structural zeros, are serialized.
+If an API function takes multiple value references, the serialized variables are concatenated.
+
+===== Getting and Setting Variable Values [[get-and-set-variable-values]]
+
+Restrictions for setting and getting of variables with certain types, causalities and variabilities are defined in the state machine and state descriptions (see <<common-state-machine>> for common states, <<state-machine-model-exchange>> for Model Exchange, <<state-machine-co-simulation>> for Co-Simulation, and <<state-machine-scheduled-execution>> for Scheduled Execution).
+In addition to those state-specific restrictions, setting and getting of <<clocked-variable,clocked variables>> is only allowed during <<EventMode>> when their respective Clocks are active, and during <<InitializationMode>> irrespective of Clock activation status.
+
+The variable <<ModelVariables,type>> defined in the <<modelDescription.xml>> determines the function <<get-and-set-variable-values,`fmi3Get/Set{VariableType}`>> (see also <<VariableType,`{VariableType}`>> and <<VariableTypeExclClock,`{VariableTypeExclClock}`>>) that must be used for accessing the respective variable values.
+To set or inquire variables of type <<figure-schema-Enumeration,`Enumeration`>>, `fmi3SetInt64` and `fmi3GetInt64` must be used. +
+_[Since C allows negative values for enumerations, signed integers are used._
+_With enums being defined as int in the programming language C and compilers are free to choose any bit-width for int, 64 bit getters and setters are needed to be platform and compiler agnostic.]_
+
+The current values of the variables may be inquired with the following functions:
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=Getters]
+
+include::../headers/fmi3FunctionTypes.h[tags=GetClock]
+----
+
+* `valueReferences` is a vector of `nValueReferences` handles that reference the variables that shall be inquired.
+
+* `values` is a vector consisting of the <<serialization-of-variables,serialized>> values of these variables.
+
+* `valueSizes` is a vector with the actual sizes of the values for binary variables.
+
+* `nValues` provides the number of values in the `values` vector (and `valueSizes` vector, where applicable) which is only equal to `nValueReferences` if all <<valueReference>>pass:[s] point to scalar variables.
+_[The passing of `nValues` is redundant:
+The number of values can be reconstructed from the value references passed in and their corresponding variable definitions and (potentially dynamic) array sizes.
+It is added to enable memory safety and other sanity checks.]_
+
+The strings returned by `fmi3GetString`, as well as the binary values returned by `fmi3GetBinary`, must be copied by the importer because the allocated memory for these strings might be deallocated or overwritten by the next call of an FMU function.
+
+It is possible to set the values of variables using the following functions:
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=Setters]
+
+include::../headers/fmi3FunctionTypes.h[tags=SetClock]
+----
+
+* `valueReferences` is a vector of `nValueReferences` handles that reference the variables that shall be set.
+
+* `values` is a vector consisting of the <<serialization-of-variables,serialized>> values of these variables.
+
+* `valueSizes` is a vector with the actual sizes of the values of binary variables.
+
+* `nValues` provides the number of values in the `values` vector (and `valueSizes` vector, where applicable) which is only equal to `nValueReferences` if all <<valueReference>>pass:[s] point to scalar variables.
+
+With two exceptions, all variables that are allowed to be set with <<get-and-set-variable-values,`fmi3Set{VariableType}`>> keep their respective values until the next call to <<get-and-set-variable-values,`fmi3Set{VariableType}`>>.
+Exceptions:
+
+* Variables of type Clock must be deactivated during <<fmi3UpdateDiscreteStates>> by the FMU.
+* By setting the complete <<get-set-fmu-state,FMU state>> using <<fmi3SetFMUState>>, all variables are potentially changed.
+
+All strings passed as arguments to `fmi3SetString`, as well as all binary values passed as arguments to `fmi3SetBinary`, must be copied during these function calls by the FMU, because there is no guarantee of the lifetime of strings or binary values, when these functions return.
+
+_[Note: In Scheduled Execution, Clocks are neither activated nor deactivated by the importer using <<fmi3SetClock>>._
+_Instead: The activation of a clock requires the importer to call <<fmi3ActivateModelPartition>>.]_
+
+===== Handling min/max Range Violations [[min-max-violations]]
+
+Attributes <<min>> and <<max>> can be defined for variables of float, integer or enumeration types.
+There are several conflicting requirements on how to utilize these min/max definitions:
+
+* Avoiding forbidden regions, for example, if `u` is an <<input>> and "sqrt(u)" is computed in the FMU, `min = 0` on `u` shall guarantee that only values of `u` in the allowed regions are provided.
+Numerical algorithms, for example, solvers and optimizers, cannot guarantee these limits.
+If a variable is outside of the bounds, the solver tries to bring it back into the bounds.
+As a consequence, calling <<get-and-set-variable-values,`fmi3Set{VariableType}`>> during an iteration of such a solver might provide values that are not within defined min/max region.
+After the iteration is finalized, it is only guaranteed that a value is within its bounds up to a certain numerical precision.
+
+* During system creation and prototyping, checks on min/max should be performed.
+For maximum performance or real-time systems, these checks might not be performed.
+
+The approach in FMI is therefore that min/max definitions inform the importer about the region in which the FMU is designed to operate.
+However, the FMU should not rely on the min/max range to be properly observed.
+For example, dividing by an <<input>> or taking the square root of an <<input>> may result in returning either <<fmi3Discard>> or <<fmi3Error>>, or the FMU is able to handle this situation gracefully.
+
+If an FMU defines min/max values for <<local>> and <<output>> variables of integer and <Enumeration> types, then the FMU must return values within the defined range when <<get-and-set-variable-values,`fmi3Get{VariableType}`>> is called.
+
+If an FMU defines min/max values for <<local>> and <<output>> variables of floating point types, then the FMU may return values in the defined range with a certain uncertainty related to the tolerances of the numerical algorithms and representational limits of IEEE 754.
+
+===== Getting and Setting the Complete FMU State [[get-set-fmu-state]]
+
+The FMU has internal data representing its state.
+This internal state consists especially of the values of the continuous states, iteration variables, <<parameter>> values, <<input>> values, delay buffers, file identifiers, and FMU internal status information.
+Depending on the FMI type, only a subset of this data is directly accessible via the FMI C-API.
+With the functions of this section, the entire internal FMU state can be stored and reapplied to continue the simulation from this state.
+
+_[Examples for using this feature:_
+
+* _For variable step-size control of co-simulation algorithms: get the FMU state for every accepted communication step; if the follow-up step is not accepted, restart co-simulation from this FMU state._
+
+* _For nonlinear Kalman filters: get the FMU state just before initialization; in every sample period, set new continuous states from the Kalman filter algorithm based on measured values; integrate to the next sample instant and inquire the predicted continuous states that are used in the Kalman filter algorithm as basis to set new continuous states._
+
+* _For nonlinear model predictive control: get the FMU state just before initialization; in every sample period, set new continuous states from an observer, initialize and get the FMU state after initialization._
+_From this state, perform many simulations that are restarted after the initialization with new input variables proposed by the optimizer.]_
+
+Furthermore, the FMU state can be serialized and copied in a byte vector.
+_[This can be, for example, used to perform an expensive steady-state initialization, copy the received FMU state in a byte vector and store this vector on file._
+_Whenever needed, the byte vector can be loaded from file and deserialized, and the simulation can be restarted from this FMU state, in other words, from the steady-state initialization.]_
+
+[[fmi3GetFMUState, `fmi3GetFMUState`]]
+Function `fmi3GetFMUState`::
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=GetFMUState]
+----
+
+[[FMUState,`FMUState`]]This function copies the internal FMU state and returns a pointer to this copy in <<FMUState>>.
+<<FMUState>> must contain all information required to allow continuing the simulation from the current FMU state without additional FMI C-API calls.
+If on entry `*FMUState = NULL`, a new allocation is required.
+If `*FMUState != NULL`, then `*FMUState` points to a previously returned <<FMUState>> that is no longer needed and can be overwritten.
+In particular, <<fmi3FreeFMUState>> had not been called with this <<FMUState>> as an argument.
+_[Function <<fmi3GetFMUState>> typically reuses the memory of this <<FMUState>> in this case and returns the same pointer to it, but with the current <<FMUState>>.]_
+
+[[fmi3SetFMUState, `fmi3SetFMUState`]]
+Function `fmi3SetFMUState`::
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=SetFMUState]
+----
+
+This function restores the state provided by <<FMUState>>.
+The FMU must not change the content of the provided <<FMUState>> to allow multiple calls of <<fmi3SetFMUState>> with this <<FMUState>>.
+
+[[fmi3FreeFMUState, `fmi3FreeFMUState`]]
+Function `fmi3FreeFMUState`::
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=FreeFMUState]
+----
+
+This function frees all memory and other resources allocated with the <<fmi3GetFMUState>> call for the provided argument <<FMUState>>.
+If a NULL pointer is provided, the call is ignored.
+The function returns a NULL pointer in argument <<FMUState>>.
+
+The functions above may be called, only if the capability flag <<canGetAndSetFMUState>> is set to `true`.
+
+[[fmi3SerializedFMUStateSize,`fmi3SerializedFMUStateSize`]]
+Function `fmi3SerializedFMUStateSize`::
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=SerializedFMUStateSize]
+----
+
+This function returns the `size` of the byte vector, in order that <<FMUState>> can be stored in it.
+With this information, the environment must allocate an `fmi3Byte` vector of the required length `size`.
+
+[[fmi3SerializeFMUState,`fmi3SerializeFMUState`]]
+Function `fmi3SerializeFMUState`::
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=SerializeFMUState]
+----
+
+This function serializes the data which is referenced by pointer <<FMUState>> and copies this data in to the byte vector `serializedState` of length `size`, that must be provided by the environment.
+
+[[fmi3DeserializeFMUState,`fmi3DeserializeFMUState`]]
+Function `fmi3DeserializeFMUState`::
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=DeserializeFMUState]
+----
+
+This function deserializes the byte vector `serializedState` of length `size`, constructs a copy of the FMU state and returns <<FMUState>>, the pointer to this copy.
+
+These serialization and deserialization functions may be called, only if the capability flags <<canGetAndSetFMUState>> and <<canSerializeFMUState>> are set to `true`.
+
+==== Clocks [[Clock,Clock]]
+
+This specification defines the behavior of clocked FMUs, it does not specify how the importer uses this functionality.
+This allows different use cases to be implemented with different Clock semantics.
+
+===== Motivation
+
+Clock variables synchronize events between importer and across FMUs, by
+
+* communicating exactly which specific event happens (using <<fmi3SetClock>> in <<EventMode>> in ME and CS or <<fmi3ActivateModelPartition>> in SE) and
+* exactly at which time instant, independent from continuous time specified by the arguments of <<fmi3SetTime>> or <<fmi3DoStep>>.
+
+Clocks define <<clocked-variable,model partitions>> effecting only <<clocked-variable,clocked variables>>.
+
+===== Clock Types [[fmi3Clock,`fmi3Clock`]]
+
+Clocks are <<discrete>> <<fmu-variables,variables>> of type `fmi3Clock`.
+They are restricted to being scalar variables.
+
+The variable's attribute <<intervalVariability>> declares the type of Clock, see overview in <<table-overview-clocks>>.
+After <<table-overview-clocks>> Clock types are explained in more detail.
+
+Input Clock::
+[[inputClock, `input Clock`]]
+is a variable of type Clock with <<causality>> = <<input>>.
+In Model Exchange and Co-Simulation, when input Clocks tick, the importer will activate the input Clocks using <<fmi3SetClock>>.
+In Scheduled Execution, when input Clocks tick, the importer will activate the associated model partitions (but not the input Clocks) using <<fmi3ActivateModelPartition>>.
+While the importer is the source of the actual Clock activations, the timing of the Clocks is defined by the FMU, either through the <<modelDescription.xml>> or calling <<fmi3GetInterval>>, or by another Clock connected to a <<triggered>> input Clock.
+
+Output Clock::
+[[outputClock, `output Clock`]]
+is a variable of type Clock with <<causality>> = <<output>>.
+
+The attribute <<intervalVariability>> must be <<triggered>> for <<outputClock,output Clocks>>.
+The importer calls <<fmi3GetClock>> to inquire the Clock's activation state.
+
+.Overview of Clock types.
+[[table-overview-clocks]]
+[cols="9,9,16,9,40,40"]
+|====
+2.2+h|Clock properties
+2+h|XML attributes
+.2+h|Related API calls
+.2+h|Example
+
+h|<<causality>>
+h|<<intervalVariability>>
+
+.5+|<<time-based-clock,time-based>>
+.3+|[[periodic-clock]]periodic
+.3+|<<input>>
+|`constant`
+|[[constant-clock]]<<fmi3SetClock>> in <<EventMode>>,
+<<fmi3ActivateModelPartition>> in <<ClockActivationMode>>,
+<<fmi3GetInterval>> and <<fmi3GetShift>> in <<InitializationMode>>
+|clocked PI-controller with a defined constant interval
+
+|`fixed`
+a|[[fixed-clock]]<<fmi3SetClock>> in <<EventMode>>,
+<<fmi3ActivateModelPartition>> in <<ClockActivationMode>>,
+
+* if <<intervalDecimal>> is defined, <<fmi3SetInterval>> in <<InitializationMode>>,
+* if <<intervalDecimal>> is not defined, <<fmi3GetInterval>> and <<fmi3GetShift>> in <<InitializationMode>>
+
+|clocked PI-controller with directly or indirectly adaptable interval
+
+|`tunable`
+a|[[tunable-clock]]<<fmi3SetClock>> in <<EventMode>>,
+<<fmi3ActivateModelPartition>> in <<ClockActivationMode>>,
+
+* if <<intervalDecimal>> is defined, <<fmi3SetInterval>> in <<InitializationMode>>, <<EventMode>> and in <<ClockActivationMode>>
+* if <<intervalDecimal>> is not defined, <<fmi3GetShift>> in <<InitializationMode>>, <<fmi3GetInterval>> in <<InitializationMode>>, <<EventMode>> and in <<ClockActivationMode>>
+
+|clocked PI-controller with directly or indirectly tunable interval
+
+.2+|[[aperiodic-clock]]aperiodic
+.2+|<<input>>
+|`changing`
+|[[changing-aperiodic-clock]]<<fmi3SetClock>> in <<EventMode>>,
+<<fmi3ActivateModelPartition>> in <<ClockActivationMode>>,
+<<fmi3GetInterval>> in <<InitializationMode>>,
+<<fmi3GetInterval>> in both <<EventMode>> and <<ClockActivationMode>> if and only if this Clock ticked
+|simulation of the behavior of a control algorithm with variable execution time, generation of pulse sequences
+
+|`countdown`
+|[[countdown-aperiodic-clock]]<<fmi3SetClock>> in <<EventMode>>,
+<<fmi3ActivateModelPartition>> in <<ClockActivationMode>>,
+<<fmi3GetInterval>> in <<InitializationMode>>, in every <<EventMode>> and in every <<ClockUpdateMode>>.
+In Scheduled Execution the FMU must inform the importer by calling <<fmi3ClockUpdateCallback>> that the Clock is about to tick
+|time-delayed actions after an event, for example, ignition signal some time after specific crank shaft angle
+
+2.3+|[[triggered,`triggered`]]<<triggered-clock,triggered>>
+|<<input>>
+|`triggered`
+|<<fmi3SetClock>> in <<EventMode>>,
+<<fmi3ActivateModelPartition>> in <<ClockActivationMode>>
+|triggered by a hardware interrupt of an embedded system, e.g. a control algorithm, triggered by a crankshaft angle
+
+|<<output>>
+|`triggered`
+|<<fmi3GetClock>> in both <<EventMode>> and <<ClockUpdateMode>>
+|crankshaft angle sensor ticking several times per revolution
+
+|<<local>>
+|`triggered`
+|<<fmi3GetClock>> in <<EventMode>>.
+|e.g. a clock inside a composed FMU that can be used only for debugging
+|====
+
+[[time-based-clock,time-based Clock]]Time-based Clock::
+
+is predictable and allows the importer to take its Clock ticks into account a priori.
+Time-based Clocks are input Clocks because the importer calls <<fmi3SetClock>> or <<fmi3ActivateModelPartition>> on these Clocks.
+The importer queries the FMU about when a time-based Clock should tick.
+The importer must activate the Clock by calling <<fmi3SetClock>> or <<fmi3ActivateModelPartition>>.
++
+The mathematical descriptions of time-based Clocks uses the following notations:
+
++
+.Mathematical Notation Description.
+[#table-notation-description]
+[cols="1,5"]
+|===
+|latexmath:[t_0]
+|The time instant when the Clock ticks the first time.
+
+|latexmath:[t_{i-1}]
+|The previous time instant, when the Clock ticked.
+
+|latexmath:[T_{\mathit{shift}}]
+|The delay for the first Clock tick relative to latexmath:[t_{\mathit{start}}]. latexmath:[T_{\mathit{shift}}] is defined differently for the different Clock types, and can be set with <<fmi3SetShiftDecimal>> or retrieved from the FMU with <<fmi3GetShiftDecimal>> as floating point value, or as rational number using <<fmi3SetShiftFraction>> or <<fmi3GetShiftFraction>>.
+
+|latexmath:[T_{\mathit{interval, i}}]
+|The time interval until the next Clock tick, defined differently for the different Clock types.
+latexmath:[T_{\mathit{interval, i}}] can be set with <<fmi3SetIntervalDecimal>> or retrieved with <<fmi3GetIntervalDecimal>> as floating point value, or as rational number using <<fmi3SetIntervalFraction>> or <<fmi3GetIntervalFraction>>.
+
+|latexmath:[t_{\mathit{event}}]
+|The current event time in <<EventMode>>, or the current time in Scheduled Execution.
+
+|===
+
+Periodic Clock::
+is a time-based Clock with a constant interval, except when <<intervalVariability>> = <<tunable>>, which indicates that the interval can change when tunable <<parameter, parameters>> change.
+The time instant of the first Clock tick is defined by a <<shiftCounter>> or <<shiftDecimal>>.
++
+The next Clock tick at time instant latexmath:[t_i] is defined as: +
+latexmath:[\begin{align*}
+t_0 &:= t_{\mathit{start}} + T_{\mathit{shift}} \\
+t_i &:= t_{i-1} + T_{\mathit{interval, i}} \qquad i = 1,2,3,{...}
+\end{align*}]
+
++
+.Restrictions.
+[#periodic-clock-restrictions]
+[cols="1,2"]
+|===
+
+|latexmath:[T_{\mathit{interval, i}} > 0]
+|The time interval from the previous Clock tick to the current Clock tick, specified differently for the different Clock types.
+|===
+
+Constant periodic Clock::
+is a time-based periodic clock that defines its <<intervalDecimal>> and optionally <<intervalCounter>>, <<shiftCounter>> and <<shiftDecimal>> in the <<modelDescription.xml>>.
+
+Fixed periodic Clock::
+is a time-based periodic Clock which ticks with an arbitrary, but fixed interval latexmath:[T_{\mathit{interval}}] starting after an arbitrary latexmath:[T_{\mathit{shift}}], both interval and shift can be changed by the importer.
+
++
+If <<intervalDecimal,`intervalDecimal`>> is specified, the importer sets the Clock's `fixed` interval using <<fmi3SetInterval>> in <<InitializationMode>>.
+If the function is not called the value given in <<intervalDecimal,`intervalDecimal`>> and <<intervalCounter,`intervalCounter`>> is used.
+
++
+_[Calling <<fmi3SetInterval>> informs the FMU about the interval determined by the importer to enable the FMU to adapt internal computations to this `fixed` interval.]_
+
++
+If <<intervalDecimal,`intervalDecimal`>> is not specified, then the importer must use <<fmi3GetInterval>> and <<fmi3GetShift>> to retrieve the Clock interval and shift in <<InitializationMode>> because they depend on <<fixed>> <<parameter, parameters>>.
+
+Tunable periodic Clock::
+is a time-based periodic Clock which ticks with an arbitrary and changeable interval latexmath:[T_{\mathit{interval}}] starting after an arbitrary latexmath:[T_{\mathit{shift}}], both interval and shift can be changed by the importer.
+
++
+If <<intervalDecimal,`intervalDecimal`>> is specified, the importer sets the Clock's `tunable` interval using <<fmi3SetInterval>> in <<InitializationMode>>.
+It can later change this interval in <<EventMode>> or <<ClockActivationMode>>.
+If the function is not called, the value given in <<intervalDecimal,`intervalDecimal`>> and <<intervalCounter,`intervalCounter`>> is used by the importer.
+
++
+_[Calling <<fmi3SetInterval>> informs the FMU about the interval determined by the importer to enable the FMU to adapt internal computations to this `tunable` interval.]_
+
++
+If <<intervalDecimal,`intervalDecimal`>> is not specified, then the importer must use <<fmi3GetInterval>> to retrieve the Clock interval in <<InitializationMode>>, and later in <<EventMode>> or <<ClockActivationMode>>, if any of the <<tunable>> <<parameter, parameters>> the Clock's interval depends on was changed.
+The shift may only depend on <<fixed>> <<parameter, parameters>>.
+The importer must use <<fmi3GetShift>> to retrieve the Clock shift in <<InitializationMode>>.
+
+Aperiodic Clock::
+is a time-based Clock with an interval that can change during runtime by FMU-internal mechanisms.
+Calling <<fmi3GetShift>> or <<fmi3SetShift>> is not allowed.
+
+Changing aperiodic Clock::
+is a time-based Clock whose next interval is unchangeably known right after the Clock just ticked.
++
+The next Clock tick at time instant latexmath:[t_i] is defined as: +
+latexmath:[\begin{align*}
+t_0 &:= t_{\mathit{start}} + T_{\mathit{interval, 0}} \\
+t_i &:= t_{i-1} + T_{\mathit{interval, i}} \qquad i = 1,2,3,{...}
+\end{align*}]
+
++
+.Restrictions.
+[#changing-clock-restrictions]
+[cols="1,2"]
+|===
+
+|latexmath:[T_{\mathit{interval, 0}} \geq 0]
+|The time interval from latexmath:[t_{\mathit{start}}] to first Clock tick.
+Must be retrieved using <<fmi3GetInterval>> in <<InitializationMode>>.
+
+|latexmath:[T_{\mathit{interval, i}} \geq 0, \qquad i = 1,2,3,{...}]
+|The time interval from the current Clock tick to the next Clock tick.
+Must be retrieved using <<fmi3GetInterval>> in <<EventMode>> or <<ClockActivationMode>> if and only if the corresponding Clock ticked.
+
+|===
+
+Countdown aperiodic Clock::
+is a time-based Clock whose next interval is not yet known right after the Clock just ticked, forcing the importer to call <<fmi3GetInterval>> in <<InitializationMode>>, in every <<EventMode>> and <<ClockUpdateMode>>.
+The return argument <<qualifiers>> of <<fmi3GetInterval>> is used to indicate if the next interval is already known.
++
+The next Clock tick at time instant latexmath:[t_i] is defined as: +
+latexmath:[\begin{align*}
+t_0 &:= t_{\mathit{start}} + T_{\mathit{interval, 0}} \\
+t_i &:= t_{\mathit{event}} + T_{\mathit{interval, i}} \qquad i = 1,2,3,{...}
+\end{align*}]
+
++
+.Restrictions.
+[#countdown-clock-restrictions]
+[cols="1,2"]
+|===
+
+|latexmath:[T_{\mathit{interval, 0}} \geq 0]
+|The time interval from latexmath:[t_{\mathit{start}}] to the first Clock tick.
+Must be retrieved using <<fmi3GetInterval>> in <<InitializationMode>>.
+
+|latexmath:[T_{\mathit{interval, i}} \geq 0, \qquad i = 1,2,3,{...}]
+|The time interval starting at the current <<EventMode>> or <<ClockUpdateMode>> when <<fmi3GetInterval>> is called.
+
+|===
+
+[[triggered-clock]]Triggered Clock::
+ticks unpredictably.
+
+Triggered input Clock::
+is activated with <<fmi3SetClock>> by the importer in <<EventMode>>, or triggers activation of the associated model partition with <<fmi3ActivateModelPartition>> in <<ClockActivationMode>>.
+
+Triggered output Clock::
+is activated within the FMU and the importer must call <<fmi3GetClock>> in <<EventMode>> or in <<ClockUpdateMode>>.
+
+Triggered local Clock::
+is activated within the FMU and the importer must call <<fmi3GetClock>> in <<EventMode>>.
+Only local variables can be clocked variables of local Clocks.
+Like all local variables, local Clocks must not be used as inputs to other FMUs and must not be listed in the <<ModelStructure>>.
+This clock type is not allowed in Scheduled Execution.
+
+_[<<outputClock,Output Clocks>> enable an FMU to provide a trigger to the outside world, e.g. to a <<triggered,triggered input Clock>> of another FMU._ +
+_If an FMU wants to actively trigger a model partition (Clock) of itself, it should use a <<countdown-aperiodic-clock,countdown Clock>>._
+_An example is provided in <<example-scheduled-execution>>.]_
+
+===== Model Partitions and Clocked Variables [[clocked-variable]]
+
+Each Clock latexmath:[k] induces a discrete subsystem.
+Its state advances at each tick of latexmath:[k].
+Such a system, also called the <<model-partition>> of latexmath:[k], may represent a part of control code, an interrupt service routine of an embedded system, or a discretized part of a plant model.
+
+A model partition is written as:
+
+latexmath:[\begin{align*}
+(\mathbf{x}_k) &:= \mathbf{f}_{\mathit{disc}}(^\bullet{\mathbf{x}_k}, \mathbf{u}, t) \\
+(\mathbf{y}_k) &:= \mathbf{f}_{\mathit{event}}(\mathbf{x}_k, \mathbf{u}, t)
+\end{align*}]
+
+where:
+
+* latexmath:[\mathbf{f}_{\mathit{disc}}] denotes the state transition function and
+* latexmath:[\mathbf{f}_{\mathit{event}}] denotes the output function of the <<model-partition>> of latexmath:[k].
+
+When latexmath:[k] is active (i.e., ticking) invoking the FMI functions `fmi3Get{VariableType}` on variables in the output vector latexmath:[\mathbf{y}_k] will trigger the execution of the output function latexmath:[\mathbf{f}_{\mathit{event}}] to compute such variables.
+If <<providesEvaluateDiscreteStates>> is `false`, then latexmath:[\mathbf{f}_{\mathit{disc}}] cannot be called explicitly using <<fmi3EvaluateDiscreteStates>>, but will be implicitly executed during latexmath:[\mathbf{f}_{\mathit{event}}].
+When <<fmi3EvaluateDiscreteStates>> is called, the state vector latexmath:[\mathbf{x}_k] is updated according to state transition function latexmath:[\mathbf{f}_{\mathit{disc}}].
+
+_[Separating_ latexmath:[\mathbf{f}_{\mathit{disc}}] _from_ latexmath:[\mathbf{f}_{\mathit{event}}] _allows manipulation of the current (discrete) state and compute the corresponding outputs, for instance for model-based control applications.]_
+
+The discrete-time variables latexmath:[\mathbf{x}_k] and latexmath:[\mathbf{y}_k] are called clocked variables.
+Clocked variables latexmath:[\mathbf{v}_k] can acquire new values and can be queried only when their Clock latexmath:[k] is active, except during <<InitializationMode>>.
+_[This is common in clock semantics, see for example <<MLS12>>.]_
+During <<InitializationMode>>, if a clocked variable is declared as an <<InitialUnknown>>, then it must be initialized as all other discrete variable of the FMU.
+Declaring a clocked variable as an <<InitialUnknown>> is optional.
+Uninitialized clocked variables must be initialized in the corresponding Clock's first tick.
+
+A <<ClockedState>> is a clocked variable belonging to the state vector latexmath:[\mathbf{x}_k], whose value depends on its previous value (i.e., the value computed at the last Clock tick).
+Clocked states declare the <<valueReference>> of their previous variable using the <<previous>> attribute.
+
+The association between <<clocked-variable,clocked variables>> and their <<Clock,Clocks>> is defined by the attribute <<clocks>>.
+<<clocked-variable,Clocked variables>> can depend on multiple Clocks.
+_[For example, a global counter could be incremented by multiple model partitions, each controlled by a different Clock.]_
+
+Output clocks may depend on input Clocks and other variables.
+Such <<dependencies>> are declared in the <<ModelStructure>>.
+A Clock latexmath:[k] depends on a Clock or variable latexmath:[v] if a tick or the value of latexmath:[v] may trigger a tick of latexmath:[k] during the same super-dense time instant.
+
+Declaring a variable as <<clocked-variable,clocked variable>> using the <<clocks>> attribute specifies a <<dependencies,dependency>> too, but also declares that such a clocked variable can only be <<get-and-set-variable-values,accessed>> when one of the referenced Clocks is active.
+This also holds for <<clocked-variable,clocked variables>> of type <<Clock>>. +
+_[This means that variables referenced by <<clocks>> and <<dependencies>> are not strict subsets of one another because <<clocks>> may list output Clocks that are not part of the_ latexmath:[{\mathbf{v}_{\mathit{known}}}] _.]_
+
+===== Clocks specific API
+
+[[fmi3GetClock,`fmi3GetClock`]]
+[[fmi3SetClock,`fmi3SetClock`]]Clocks are get and set just like any other variable (see also <<get-and-set-variable-values>>).
+For restrictions on when to call which of the following functions for <<table-overview-clocks,each Clock type>>, see <<table-overview-clocks>>.
+
+<<fmi3SetClock>> must not be called in Scheduled Execution, instead <<fmi3ActivateModelPartition>> must be called.
+
+[[fmi3SetInterval,`fmi3SetInterval`]]
+For <<table-overview-clocks,some Clock types>>, the interval must be set by the environment for the current time instant by the function <<fmi3SetIntervalDecimal>> or <<fmi3SetIntervalFraction>>.
+The values of the arguments <<intervals>>, <<shifts>>, and <<counters>> / <<resolutions>> refer to the unit of the <<independent>> variable.
+
+The attribute <<supportsFraction>> of a Clock declares if the <<fmi3SetIntervalFraction>> and/or `fmi3GetXXXFraction` functions may be called.
+
+[[fmi3SetIntervalDecimal,`fmi3SetIntervalDecimal`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=SetIntervalDecimal]
+----
+
+* `valueReferences` is an array of size `nValueReferences` holding the value references of the Clock variables.
+
+[[intervals,`intervals`]]
+* <<intervals>> is an array of size `nValueReferences` holding the Clock intervals to be set.
+
+[[fmi3SetIntervalFraction,`fmi3SetIntervalFraction`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=SetIntervalFraction]
+----
+
+* `valueReferences` is an array of size `nValueReferences` holding the value references of the Clock variables.
+
+[[counters,`counters`]]
+* <<counters>> _[Note: This variable may increment by values other than 1.]_ and
+
+[[resolutions,`resolutions`]]
+* <<resolutions>> are arrays of size `nValueReferences` holding the Clock <<counters>> and <<resolutions>> to be set.
+
+[[fmi3GetInterval,`fmi3GetInterval`]]
+For <<table-overview-clocks,other Clock types>>, the importer must call <<fmi3GetIntervalDecimal>> or <<fmi3GetIntervalFraction>> to query the next Clock interval:
+
+[[fmi3GetIntervalDecimal,`fmi3GetIntervalDecimal`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=GetIntervalDecimal]
+----
+
+* `valueReferences` is an array of size `nValueReferences` holding the value references of the Clock variables.
+
+* <<intervals>> is an array of size `nValueReferences` to retrieve the Clock intervals.
+
+[[qualifiers,`qualifiers`]]
+* <<qualifiers>> is an array of size `nValueReferences` to retrieve the Clocks <<qualifiers>>.
+<<qualifiers>> describes how to treat the <<intervals>> and <<counters>> arguments and is defined as:
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=IntervalQualifier]
+----
+with the following meanings:
+
+[[fmi3IntervalChanged,`fmi3IntervalChanged`]]
+ * `fmi3IntervalChanged` is returned to indicate that the value for the interval has changed for this <<Clock>>.
+ Any previously returned intervals (if any) are overwritten with the current value.
+ The new <<Clock>> interval is relative to the time of the current <<EventMode>> or <<ClockUpdateMode>> in contrast to the interval of a periodic <<Clock>>, where the interval is defined as the time between consecutive <<Clock>> ticks.
+ In Scheduled Execution this means that the corresponding model partition must be scheduled or re-scheduled (if a previous call to <<fmi3GetInterval>> returned <<fmi3IntervalChanged>>).
+
+[[fmi3IntervalUnchanged,`fmi3IntervalUnchanged`]]
+  * `fmi3IntervalUnchanged` is returned if a previous call to <<fmi3GetInterval>> already returned a value qualified with <<fmi3IntervalChanged>> which has not changed since.
+  In Scheduled Execution this means the corresponding model partition has already been scheduled.
+
+[[fmi3IntervalNotYetKnown,`fmi3IntervalNotYetKnown`]]
+ * `fmi3IntervalNotYetKnown` is returned for a <<countdown-aperiodic-clock,`countdown`>> Clock for which the next interval is not yet known.
+ This qualifier value can only be returned directly after the Clock was active and previous calls to <<fmi3GetInterval>> never returned <<fmi3IntervalChanged>> (nor <<fmi3IntervalUnchanged>>).
+ In Scheduled Execution this return value means that the corresponding model partition cannot be scheduled yet.
+
+[[fmi3GetIntervalFraction,`fmi3GetIntervalFraction`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=GetIntervalFraction]
+----
+
+* `valueReferences` is an array of size `nValueReferences` holding the value references of the `Clock` variables.
+
+* <<counters>> and <<resolutions>> are arrays of size `nValueReferences` to retrieve the Clock intervals as a fraction `counters / resolutions`.
+
+* <<qualifiers>> is an array of size `nValueReferences` to retrieve the Clock <<qualifiers>>.
+
+[[shifts,`shifts`]]
+For <<table-overview-clocks,some Clock types>>, the importer must query the delay to the first Clock tick from the FMU using the following functions[[fmi3GetShift,`fmi3GetShift`]]:
+
+[[fmi3GetShiftDecimal,`fmi3GetShiftDecimal`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=GetShiftDecimal]
+----
+
+[[fmi3GetShiftFraction,`fmi3GetShiftFraction`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=GetShiftFraction]
+----
+
+* `valueReferences` is an array of size `nValueReferences` holding the value references of the Clock variables.
+
+* <<shifts>> and <<counters>> are arrays of length `nValueReferences` that define the time of the first Clock tick (see <<shiftCounter>>).
+
+For <<table-overview-clocks,other Clock types>>, the importer may set the delay to the first Clock tick from the FMU using the following functions[[fmi3SetShift,`fmi3SetShift`]]:
+[[fmi3SetShiftDecimal,`fmi3SetShiftDecimal`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=SetShiftDecimal]
+----
+
+[[fmi3SetShiftFraction,`fmi3SetShiftFraction`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=SetShiftFraction]
+----
+
+* `valueReferences` is an array of size `nValueReferences` holding the value references of the Clock variables.
+
+* <<shifts>> and <<counters>> is an array of length `nValueReferences` that defines the time of the first Clock tick (see <<shiftCounter>>).
+
+==== Dependencies of Variables [[model-dependencies]]
+
+Dependencies between variables of an FMU:
+
+* allow the detection and classification of <<algebraic-loops,algebraic loops>> across inputs and outputs when connecting FMUs,
+* declare the relationship between derivatives and continuous states and other variables,
+* associate event indicators with variables, and
+* define the sparseness when computing <<partial-derivatives,partial derivatives>>, avoiding unnecessary calls to <<fmi3GetDirectionalDerivative>> and <<fmi3GetAdjointDerivative>>.
+
+Note, the dependencies between <<clocked-variable,clocked variables>> and their <<Clock,Clocks>> are defined by the attribute <<clocks>> in `<fmiModelDescription><ModelVariables>`.
+Compared to <<dependencies>>, <<clocks>> declared dependencies also restrict when <<clocked-variable,clocked variables>> can be <<get-and-set-variable-values,accessed>>.
+
+The <<dependencies>> are encoded in the <<modelDescription.xml>> with the element <<ModelStructure>> and:
+
+* do not resolve to dependencies of individual array elements,
+* do not take changing dependencies due to resizing of arrays via <<structuralParameter,`structural parameters`>> into account,
+* are independent of the FMUs current operating point and parameter settings.
+
+An FMU can indicate via the `providesPerElementDependencies` capability flag that it is able to provide detailed dependency information at runtime through the following C-API.
+The dependency information returned by these functions depend on the current operating point and parameter settings.
+
+The number of dependencies of a given variable, which may change if <<structuralParameter,`structural parameters`>> are changed, can be retrieved by calling the following function:
+
+[[fmi3GetNumberOfVariableDependencies,`fmi3GetNumberOfVariableDependencies`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=GetNumberOfVariableDependencies]
+----
+
+This function returns the number of <<dependencies>> for a given variable.
+
+* `valueReference` specifies the <<valueReference>> of the variable for which the number of <<dependencies>> shall be returned.
+
+* `nDependencies` points to the `size_t` variable that will receive the number of <<dependencies>>.
+
+[[fmi3GetVariableDependencies,`fmi3GetVariableDependencies`]]
+The actual <<dependencies>> (of type <<dependenciesKind>>) may be retrieved by calling the function <<fmi3GetVariableDependencies>>:
+
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=DependencyKind]
+
+include::../headers/fmi3FunctionTypes.h[tags=GetVariableDependencies]
+----
+
+This function returns the dependency information for a single variable.
+
+* `dependent` specifies the <<valueReference>> of the variable for which the dependencies should be returned.
+
+* `nDependencies` specifies the number of dependencies that the calling environment allocated space for in the result buffers, and should correspond to value obtained by calling <<fmi3GetNumberOfVariableDependencies>>.
+
+* `elementIndicesOfDependent` must point to a buffer of `size_t` values of size `nDependencies` allocated by the calling environment.
+It is filled in by this function with the element index of the dependent variable that dependency information is provided for.
+The element indices start with 1. Using the element index 0 means all elements of the variable.
+(Note: If an array has more than one dimension the indices are serialized in the same order as defined for values in <<serialization-of-variables>>.)
+
+* `independents` must point to a buffer of <<fmi3ValueReference>> values of size `nDependencies` allocated by the calling environment.
+It is filled in by this function with the value reference of the <<independent>> variable that this dependency entry is dependent upon.
+
+* `elementIndicesIndependents` must point to a buffer of `size_t` values of size `nDependencies` allocated by the calling environment.
+It is filled in by this function with the element index of the <<independent>> variable that this dependency entry is dependent upon.
+The element indices start with 1.
+Using the element index 0 means all elements of the variable.
+(Note: If an array has more than one dimension the indices are serialized in the same order as defined for values in <<serialization-of-variables>>.)
+
+* `dependencyKinds` must point to a buffer of <<dependenciesKind>> values of size `nDependencies` allocated by the calling environment.
+It is filled in by this function with the enumeration value describing the dependency of this dependency entry.
+
+If this function is called before the <<fmi3ExitInitializationMode>> call, it returns the initial dependencies.
+If this function is called after the <<fmi3ExitInitializationMode>> call, it returns the runtime dependencies.
+The retrieved dependency information of one variable becomes invalid as soon as a <<structuralParameter,`structural parameter`>> linked to the variable or to any of its depending variables is set.
+
+==== Selective Computation of Variables [[selective-computation]]
+
+Depending on the phase of the solver algorithm, different FMU variables need to be computed.
+FMI allows selective retrieval of FMU variables with specific get functions (e.g. <<get-and-set-variable-values,`fmi3Get{VariableType}`>>, <<fmi3GetEventIndicators>>, <<fmi3GetContinuousStateDerivatives>>).
+This enables computation on demand with subsequent calls returning the same value until some set operation requires re-computation.
+
+For example:
+* during the iteration of an integrator step, only the state derivatives need to be computed, provided the <<output>> of an FMU is not connected, or
+* when localizing <<state-event,state events>>, only the computation of event indicators may be required.
+
+Because specific set functions exist (<<get-and-set-variable-values,`fmi3Set{VariableType}`>>, <<fmi3SetTime>>, <<fmi3SetContinuousStates>>), caching algorithms can be applied to reuse already computed values.
+
+In all tables describing the mathematical model of a state (e.g. <<table-math-model-exchange,ContinuousTimeMode>>), for notational convenience one function (e.g. latexmath:[\mathbf{f}_{\mathit{cont}}]) is defined to compute all outputs from all input arguments.
+However, in an efficiently implemented FMU, computation of each output may be triggered by its specific get function.
+Additionally, the outputs may be a function of a subset of the input arguments, as defined in the <<ModelStructure>>.
+
+_[The functions above have the slight drawback that values must always be copied._
+_For example, a call to_ <<fmi3SetContinuousStates>> _provides the new continuous states in a vector._
+_This function must copy the state values into an internal data structure such that subsequent computations triggered by get functions will utilize these values.]_
+
+==== Algebraic Loops [[algebraic-loops]]
+
+When connecting FMUs, loop structures may occur that lead to linear or nonlinear algebraic systems of equations, involving continuous and discrete-time variables.
+In order to detect and solve such systems of equations efficiently, information which <<output,`output`>> depends directly on which <<input,`inputs`>> is needed.
+This data may be provided in the <<modelDescription.xml>> under element <<ModelStructure>>.
+If this data is not provided, the worst case must be assumed: all <<output>> variables depend algebraically on all <<input>> variables.
+
+_[Example: In <<figure-connected-fmus>> two different types of connected FMUs are shown (the "dotted lines" characterize the dependency information):_
+
+.Calling sequences for FMUs that are connected in a loop.
+[#figure-connected-fmus]
+image::images/ArtificialAlgebraicLoops.svg[width=80%, align="center"]
+
+_Since different variables are computed in every mode and the causality of variable computation can be different in <<InitializationMode>> compared to other modes, it might be necessary to solve different kinds of loops in the different modes._ +
+_Artificial algebraic loops (see left diagram of <<figure-connected-fmus>>) can be solved in the modes <<InitializationMode>>, <<EventMode>>, and <<ContinuousTimeMode>> by an appropriate sequence of <<get-and-set-variable-values,`fmi3Set{VariableType}`>> and <<get-and-set-variable-values,`fmi3Get{VariableType}`>> calls:_
+
+[source, C]
+----
+include::examples/snippets.c[tags=AlgebraicLoop1]
+----
+
+_In the right diagram of <<figure-connected-fmus>>, FMUs `M3` and `M4` are connected in such a way that a real algebraic loop is formed._
+_This loop might be solved iteratively, for example with a Newton method._
+_In every iteration the iteration variable `s` is provided by the solver, and via the shown sequence of <<get-and-set-variable-values,`fmi3Set{VariableType}`>> and <<get-and-set-variable-values,`fmi3Get{VariableType}`>> calls, the `residual` is computed and used by the solver to determine a new value of `s` as input `u` of `M4`._
+_The iteration is terminated when the `residual` is small enough._
+_This method works for <<InitializationMode>>, <<EventMode>>, and <<ContinuousTimeMode>>._
+
+[source, C]
+----
+include::examples/snippets.c[tags=AlgebraicLoop2]
+----
+
+_In <<StepMode>>, <<fmi3SetFMUState>> is required to restore the FMU state before the next iteration with <<get-and-set-variable-values,`fmi3Set{VariableType}`>>, <<fmi3DoStep>>, and <<get-and-set-variable-values,`fmi3Get{VariableType}`>> is executed._
+
+_In <<EventMode>>, the algorithms from above must be embedded in an event iteration:_
+[source, C]
+----
+include::examples/snippets.c[tags=AlgebraicLoop3]
+----
+_]_
+
+When solving algebraic loops in <<EventMode>>, limitations to variable manipulations declared with attribute <<canHandleMultipleSetPerTimeInstant>> must be observed.
+
+==== Getting Partial Derivatives [[partial-derivatives]]
+
+Partial derivatives can be used:
+
+* in Newton algorithms to solve <<algebraic-loops,algebraic loops>>,
+* in implicit integration algorithms in Model Exchange, and
+* in iterative co-simulation algorithms.
+
+To avoid expensive numeric approximations of these derivatives, FMI offers dedicated functions to retrieve partial derivatives for variables of an FMU.
+For Model Exchange, this means computing the partial derivatives at any time instant, whereas for Co-Simulation, this means computing the partial derivatives at a communication point.
+
+An FMU has different states and in every state an FMU might be described by different equations and different unknowns.
+The precise definitions are given in the mathematical descriptions of Model Exchange (<<state-machine-model-exchange>>), Co-Simulation (<<state-machine-co-simulation>>), and Scheduled Execution (<<state-machine-scheduled-execution>>).
+In every state, the general form of the FMU equations is:
+
+[latexmath]
+++++
+\mathbf{v}_{\mathit{unknown}} = \mathbf{f}(\mathbf{v}_{\mathit{known}}, \mathbf{v}_{\mathit{rest}}),
+++++
+
+where
+
+* latexmath:[\mathbf{v}_{\mathit{unknown}}] is the vector of unknown variables computed in the current state:
+
+** <<InitializationMode>>: The exposed unknowns listed as elements <<InitialUnknown>> in <<ModelStructure>> that have a floating point type.
+
+** <<ContinuousTimeMode>> (Model Exchange): The continuous-time outputs and state derivatives (= the variables listed as elements <<Output>> of <<ModelStructure>> with a floating point type and <<variability>> = <<continuous>> and the variables listed as elements <<ContinuousStateDerivative>> in <<ModelStructure>>).
+
+** <<EventMode>> (Model Exchange): The same variables as in the <<ContinuousTimeMode>> and additionally variables listed as elements <<Output>> of <<ModelStructure>> with a floating point type and <<variability>> = <<discrete>>.
+
+** <<StepMode>> (Co-Simulation): The variables listed as elements <<Output>> of <<ModelStructure>> with a floating point type and <<variability>> = <<continuous>> or <<discrete>>.
+Each continuous state derivative variable listed as elements <<ContinuousStateDerivative>> in <<ModelStructure>>, if present.
+
+* latexmath:[\mathbf{v}_{\mathit{known}}] is the vector of <<input>> variables of function latexmath:[\mathbf{f}] which can be changed by the importer in the current state.
+Details about which variables are in latexmath:[\mathbf{v}_{\mathit{known}}] are given in the description of element <<dependencies>> in <<ModelStructure>>.
+
+* latexmath:[{\mathbf{v}_{\mathit{rest}}}] is the set of <<input>> variables and discrete-time states of function latexmath:[\mathbf{f}] which cannot be set by the importer in the current state, but in other states _[for example, discrete-time <<input,`inputs`>> in <<ContinuousTimeMode>>]_.
+
+* <<EventIndicator,`EventIndicators`>> must not be included among latexmath:[\mathbf{v}_{\mathit{unknown}}]. +
+_[This is intentional as their dependencies listed in <<ModelStructure>> are intended for debugging purposes and not for partial derivatives.]_
+
+_[The variable relationships are different in different states._
+_For example, during <<ContinuousTimeMode>>, the partial derivate of a continuous-time output_ latexmath:[\mathbf{y}] _with respect to discrete-time <<input,`inputs`>> is undefined, because discrete-time <<input,`inputs`>> cannot be set between events.]_
+
+There are two access functions for partial derivatives:
+
+- <<fmi3GetDirectionalDerivative>> to compute the directional derivatives latexmath:[\mathbf{v}_{\mathit{sensitivity}} = \mathbf{J} \cdot \mathbf{v}_{\mathit{seed}}], and
+
+- <<fmi3GetAdjointDerivative>> to calculate the adjoint derivatives latexmath:[\mathbf{v}_{\mathit{sensitivity}}^T = \mathbf{v}_{\mathit{seed}}^T \cdot \mathbf{J}]
+
+with the Jacobian
+
+[latexmath]
+++++
+\mathbf{J}
+=
+\begin{bmatrix}
+\frac{\partial g_1}{\partial v_{\mathit{known},1}} & \cdots & \frac{\partial g_1}{\partial v_{\mathit{known},n}} \\
+\vdots & \ddots & \vdots \\
+\frac{\partial g_m}{\partial v_{\mathit{known},1}} & \cdots & \frac{\partial g_m}{\partial v_{\mathit{known},n}}
+\end{bmatrix}
+++++
+
+where latexmath:[\mathbf{v}_{\mathit{known}}] are the latexmath:[n] knowns, and latexmath:[\mathbf{g}] are the latexmath:[m] functions to calculate the latexmath:[m] unknown variables latexmath:[\mathbf{v}_{\mathit{unknwon}}]  from the knowns.
+
+Both functions can also be used to construct the partial derivative matrices.
+The functions may only be called if their availability is indicated by the attributes <<providesDirectionalDerivatives>> and <<providesAdjointDerivatives>>, respectively.
+
+[[fmi3GetDirectionalDerivative,`fmi3GetDirectionalDerivative`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=GetDirectionalDerivative]
+----
+
+[[fmi3GetAdjointDerivative,`fmi3GetAdjointDerivative`]]
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tags=GetAdjointDerivative]
+----
+
+Both functions have the same arguments:
+
+* `unknowns` contains value references to the unknowns.
+* `nUnknowns` contains the length of argument `unknowns`.
+* `knowns` contains value references of the knowns.
+* `nKnowns` contains the length of argument `knowns`.
+* `seed` contains the <<serialization-of-variables,serialized>> components of the seed vector.  
+* `nSeed` contains the length of `seed`.
+* `sensitivity` contains the <<serialization-of-variables,serialized>> components of the sensitivity vector.
+* `nSensitivity` contains the length of `sensitivity`.
+
+_[Note that array variables will be serialized, so `nSeed` is only equal to `nKnowns` in the case of directional derivatives (resp., equal to `nUnknowns` in the case of adjoint derivatives) if all value references of `knowns` (resp., `unknowns`) point to scalar variables._
+_Likewise `nSensitivity` is only equal to `nUnknowns` (resp., `nKnowns`) if all value references of `unknowns` (resp., `knowns`) point to scalar variables.]_
+
+===== Directional Derivatives [[directionDerivatives]]
+
+[[example-directional-derivatives]]
+_[Example:_ +
+_Assume an FMU has the output equations_
+
+[latexmath]
+++++
+\begin{bmatrix}
+y_1
+\\
+y_2
+\end{bmatrix}
+=
+\begin{bmatrix}
+g_1(x, u_1, u_3, u_4)
+\\
+g_2(x, u_1)
+\end{bmatrix}
+++++
+
+_and this FMU is connected, so that latexmath:[{y_1, u_1, u_3}] appear in an algebraic loop._
+_Then the nonlinear solver needs a Jacobian and this Jacobian can be computed (without numerical differentiation) provided the partial derivative of latexmath:[{y_1}] with respect to latexmath:[{u_1}] and latexmath:[{u_3}] is available._
+_Depending on the environment where the FMUs are connected, these <<derivative,`derivatives`>> can be provided:_
+
+(a) _with one wrapper function around function <<fmi3GetDirectionalDerivative>> to compute the directional derivatives with respect to these two variables (in other words, latexmath:[{v_{\mathit{unknown}} = y_1}], latexmath:[{v_{\mathit{known}} = \left \{ u_1, u_3 \right \}}]), and then the environment calls this wrapper function with latexmath:[{v_{\mathit{seed}} = \left \{ 1, 0 \right \}}] to compute the partial derivative with respect to latexmath:[{u_1}] and latexmath:[{v_{\mathit{seed}} = \left \{ 0, 1 \right \}}] to compute the partial derivative with respect to latexmath:[{u_3}], or_
+
+(b) _with two direct function calls of <<fmi3GetDirectionalDerivative>> (in other words, latexmath:[{v_{\mathit{unknown}} = y_1, v_{\mathit{known}} = u_1, v_{\mathit{seed}} = 1}]; and latexmath:[{v_{\mathit{unknown}} = y_1, v_{\mathit{known}} = u_3, v_{\mathit{seed}} = 1}])._
+
+_Note that a direct implementation of this function with analytic derivatives:_
+
+(a) _Provides the directional derivative for all <<input>> variables; so in the <<example-directional-derivatives,above example>>: latexmath:[{\Delta y_1 = \frac{\partial g_1}{\partial x} \cdot \Delta x + \frac{\partial g_1}{\partial u_1} \cdot \Delta u_1 + \frac{\partial g_1}{\partial u_3} \cdot \Delta u_3 + \frac{\partial g_1}{\partial u_4} \cdot \Delta u_4}]_
+
+(b) _Initializes all seed-values to zero; so in the <<example-directional-derivatives,above example>>: latexmath:[{\Delta x = \Delta u_1 = \Delta u_3 = \Delta u_4 = 0}]_
+
+(c) _Computes the directional derivative with the seed-values provided in the function arguments; so in the <<example-directional-derivatives,above example>>: latexmath:[{v_{\mathit{sensitivity}} = \Delta y_1 (\Delta x = 0, \Delta u_1 = 1, \Delta u_3 = 0, \Delta u_4 = 0)}]] and latexmath:[{v_{\mathit{sensitivity}} = \Delta y_1 (\Delta x = 0, \Delta u_1 = 0, \Delta u_3 = 1, \Delta u_4 = 0)}]]_
+
+_[Note, function <<fmi3GetDirectionalDerivative>> can be utilized for the following purposes:_
+
+- _Numerical integrators of stiff methods need matrix latexmath:[{\frac{\partial \mathbf{f}}{\partial \mathbf{x}}}]._
+
+- _If the FMU is connected with other FMUs, the partial derivatives of the state derivatives and outputs with respect to the continuous states and the <<input,`inputs`>> are needed in order to compute the Jacobian for the system of the connected FMUs._
+
+- _If the FMU shall be linearized, the same <<derivative,`derivatives`>> as in the previous item are needed._
+
+- _If the FMU is used as the model for an extended Kalman filter, latexmath:[{\frac{\partial \mathbf{f}}{\partial \mathbf{x}}}] and latexmath:[{\frac{\partial \mathbf{g}}{\partial \mathbf{x}}}] are needed._
+
+_If a dense matrix shall be computed, the columns of the matrix can be easily constructed by successive calls of <<fmi3GetDirectionalDerivative>>._
+_For example, constructing the system Jacobian latexmath:[{\mathbf{J} = \frac{\partial \mathbf{f}}{\partial \mathbf{x}}}] as dense matrix can be performed in the following way:_
+
+[source, C]
+----
+include::Reference-FMUs/examples/jacobian.c[tags=GetJacobian]
+----
+
+_If the sparsity of a matrix shall be taken into account, then the matrix can be constructed in the following way:_
+
+- _The incidence information of the matrix (whether an element is zero or not zero) is extracted from the XML file from element <<ModelStructure>>._
+
+- _A so called graph coloring algorithm is employed to determine the columns of the matrix that can be computed by one call of `fmi3GetDirectionalDerivative`._
+
+- _For the columns determined in (2), one call to <<fmi3GetDirectionalDerivative>> is made._
+_After each such call, the elements of the resulting directional derivative vector are copied into their correct locations of the partial derivative matrix._
+
+_More details and implementational notes are available from <<ABL12>>._
+
+_Example:_
+
+_Directional derivatives for higher dimension variables are almost treated in the same way.
+Consider, for example, an FMU which calculates its output latexmath:[{Y}] by multiplying its 2x2 input latexmath:[{U}] with a 3x2 constant gain latexmath:[{K}], with_
+
+[latexmath]
+++++
+K=
+\begin{bmatrix}
+a, b
+\\
+c, d
+\\
+e, f
+\end{bmatrix}
+++++
+_The output latexmath:[{Y=K U}] is a matrix of size 3x2._
+_The directional derivative of an output element latexmath:[{Y(i,j)}] with respect to the input latexmath:[{U}] and the seed latexmath:[{\Delta U}] is:_
+
+[latexmath]
+++++
+\Delta Y(i,j) =
+\frac{\partial Y(i,j)}{\partial U(1,1)} \cdot \Delta U(1,1) +
+\frac{\partial Y(i,j)}{\partial U(1,2)} \cdot \Delta U(1,2) +
+\frac{\partial Y(i,j)}{\partial U(2,1)} \cdot \Delta U(2,1) +
+\frac{\partial Y(i,j)}{\partial U(2,2)} \cdot \Delta U(2,2)
+++++
+
+[latexmath]
+++++
+\Delta \mathbf{Y} =
+\begin{bmatrix}
+a \Delta U(1,1)+b \Delta U(2,1), a \Delta U(1,2)+ b \Delta U(2,2)
+\\
+c \Delta U(1,1)+d \Delta U(2,1), c \Delta U(1,2)+ d \Delta U(2,2)
+\\
+e \Delta U(1,1)+f \Delta U(2,1), e \Delta U(1,2)+ f \Delta U(2,2)
+\end{bmatrix}
+++++
+
+_To get the directional derivative of latexmath:[{Y}] with respect to latexmath:[{U(2,1)}] the command `fmi3GetDirectionalDerivative(m, vr_Y, 1, vr_U, 1, {0.0, 0.0, 1.0, 0.0}, 4, dd, 6)` can be used where `vr_Y` and `vr_U` are references of the variable latexmath:[{Y}] and latexmath:[{U}], respectively._
+_Note that in order to get the directional derivative of latexmath:[{Y}] with respect to latexmath:[{U(2,1)}], the seed value `{0, 0, 1.0, 0}` has been used._
+_The retrieved directional derivative `dd` is stored in a matrix of size 3x2, so `nSensitivity` is 6._
+
+===== Adjoint Derivatives [[adjointDerivatives]]
+
+_[Adjoint derivatives are beneficial in several contexts:_
+
+* _in artificial intelligence (AI) frameworks the adjoint derivatives are called "vector gradient products" (VJPs)._
+_There adjoint derivatives are used in the backpropagation process to perform gradient-based optimization of parameters using reverse mode automatic differentiation (AD), see, e.g., <<BPRS15>>._
+
+* _in parameter estimation (see <<BKF17>>)_
+
+_Typically, reverse mode automatic differentiation (AD) is more efficient for these use cases than forward mode AD, as explained in the cited references._
+
+_If one would like to construct the full Jacobian matrix, one can use either <<fmi3GetDirectionalDerivative>> (to column-wise construct it) or <<fmi3GetAdjointDerivative>> (to row-wise construct it, possibly improved with coloring methods as mentioned above)._
+_However in the applications motivating the adjoint derivatives, one does not need the full Jacobian matrix latexmath:[\mathbf{J}], but vector  latexmath:[\mathbf{v}^T] multiplied from the left to the Jacobian, i.e. latexmath:[\mathbf{v}^T\mathbf{J}]._
+_For computing the full Jacobian matrix, the column-wise construct is generally more efficient.]_
+
+_Example:_ +
+_Assume an FMU has the output equations_
+
+[latexmath]
+++++
+\begin{bmatrix}
+y_1
+\\
+y_2
+\end{bmatrix}
+=
+\begin{bmatrix}
+g_1(u_1, u_2)
+\\
+g_2(u_1, u_2)
+\end{bmatrix}
+++++
+
+_and latexmath:[\left( w_1,  w_2 \right)^T \cdot \mathbf{ \frac{\partial g}{\partial u} }] for some vector latexmath:[\left( w_1,  w_2 \right)^T] is needed._
+_Then one can get this with one function call of <<fmi3GetAdjointDerivative>> (with arguments_ latexmath:[\mathbf{v}_{\mathit{unknown}} = \text{valueReferences of} \left \{ y_1, y_2 \right \},  \mathbf{v}_{\mathit{known}} = \text{valueReferences of} \left \{ u_1, u_2 \right \},  \mathbf{v}_{\mathit{seed}} = \left( w_1, w_2 \right)^T] _), while with <<fmi3GetDirectionalDerivative>> at least two calls would be necessary to first construct the Jacobian column-wise and then multiplying from the right with_ latexmath:[\left( w_1,  w_2 \right)^T] _._
+
+_If a dense matrix shall be computed, the rows of the matrix can be easily constructed by successive calls of <<fmi3GetAdjointDerivative>>._
+_For example, constructing the system Jacobian latexmath:[{\mathbf{J} = \frac{\partial \mathbf{f}}{\partial \mathbf{x}}}] as a dense matrix can be performed in the following way:_
+
+[source, C]
+----
+include::Reference-FMUs/examples/jacobian.c[tags=GetJacobianAdjoint]
+----
+
+_]_

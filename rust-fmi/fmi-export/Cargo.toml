@@ -1,0 +1,34 @@
+[package]
+name = "fmi-export"
+version = "0.2.0"
+description = "FMU export support for FMI 3.0"
+readme = "README.md"
+license.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = true
+homepage.workspace = true
+include.workspace = true
+
+[features]
+default = ["fmi3"]
+## Enable support for FMI 3.0
+fmi3 = ["fmi/fmi3"]
+## Enable support for Rumoca-based Modelica compilation
+rumoca = ["dep:anyhow", "dep:rumoca"]
+
+[dependencies]
+anyhow = { workspace = true, optional = true }
+chrono = { workspace = true }
+document-features = { workspace = true }
+fmi = { workspace = true }
+fmi-export-derive = { workspace = true }
+paste = { workspace = true }
+rumoca = { version = "0.7", optional = true }
+thiserror = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)'] }

@@ -1,0 +1,141 @@
+=== State Machine for Scheduled Execution [[state-machine-scheduled-execution]]
+
+The state machine in <<figure-scheduled-execution-state-machine>> defines the allowed calling sequences for FMI for Scheduled Execution.
+
+.Calling sequence of Scheduled Execution C functions.
+[#figure-scheduled-execution-state-machine]
+image::images/state-machine-scheduled-execution.svg[width=80%, align="center"]
+
+Common states are defined in <<common-state-machine>>, such as super states <<FMUStateSettable>> and  <<Initialized>>, states <<Instantiated>>, <<ConfigurationMode>>, <<ReconfigurationMode>>, <<InitializationMode>>, and <<Terminated>>.
+
+State changes are global to all model partitions, except to and from <<ClockUpdateMode>>.
+E.g. if any function call returns <<fmi3Discard>> or <<fmi3Error>>, all active or preempted model partitions are in the same state.
+In Scheduled Execution, <<fmi3Discard>> must be treated like <<fmi3Error>>.
+
+If the simulation algorithm intends to enter the state <<Terminated>>, it must ensure that all function calls related to model partitions of the FMU have returned.
+If in states <<ClockActivationMode>>, <<ClockUpdateMode>>, or <<ReconfigurationMode>> a function returns <<fmi3Fatal>>, the importer may prematurely end all computations of model partitions of this FMU.
+If in these states a function returns <<fmi3Discard>> or <<fmi3Error>> the importer may wait until all other model partitions of this FMU have ended, but new model partitions must not be started and all other function calls for this FMU must return <<fmi3Error>> until the state <<Terminated>> is reached.
+
+==== State: Clock Activation Mode [[ClockActivationMode,*Clock Activation Mode*]]
+
+In <<ClockActivationMode>> the scheduler of the importer activates model partitions according to their respective Clock and priority definitions.
+
+An FMU of type Schedule Execution exposes its provided <<model-partition,model partitions>> by defining associated Clocks in its <<modelDescription.xml>>.
+The scheduler must activate the model partitions by calling <<fmi3ActivateModelPartition>> (as well as related <<get-and-set-variable-values,`fmi3Get{VariableType}`>> and `fmi3Set{VariableType}`) for each associated <<Clock,Clock>>, according to its properties, e.g. <<intervalDecimal>> and <<priority>>.
+By scheduling the exposed <<model-partition, model partitions>> of an FMU and executing them at dedicated points in time it is the scheduler that defines how time progresses, see <<advancing-time>>.
+The current time latexmath:[t_i] is communicated to the FMU as <<activationTime>> argument of <<fmi3ActivateModelPartition>>.
+<<fmi3ActivateModelPartition>> must only be called once for the same Clock and time.
+
+During the computation of a model partition of an <<inputClock,input Clock>>, the FMU may inform the importer that an <<outputClock>> ticked or a <<countdown-aperiodic-clock, countdown Clock>> is about to tick by changing to <<ClockUpdateMode>> calling <<fmi3ClockUpdateCallback>>.
+The importer may then activate potential sinks (e.g. a model partition of another FMU) connected to this <<outputClock>> or must activate the model partition of the respective <<countdown-aperiodic-clock,countdown Clock>>.
+
+[cols="2,1",options="header"]
+|====
+|<<each-state-description,Equations and Actions>>
+|Functions Influencing Equations
+
+|Set <<tunable>> <<parameter,`parameters`>> latexmath:[\mathbf{p}_{\mathit{variability = tunable}}] .
+|<<get-and-set-variable-values,`fmi3Set{VariableType}`>>
+
+|Set discrete-time <<input,`inputs`>> latexmath:[\mathbf{u}_{d}(t)].
+|<<get-and-set-variable-values,`fmi3Set{VariableType}`>>
+
+|Get values of variables latexmath:[\mathbf{v}(t)].
+|<<get-and-set-variable-values,`fmi3Get{VariableType}`>>
+
+a|When an input Clock latexmath:[k_i] ticks, activate the corresponding model partition:
+
+* latexmath:[(\mathbf{y}_{d,k_i}, \mathbf{x}_{d,k_i}, \mathbf{w}_{d,k_i}) := \mathbf{f}_{\mathit{activate}}({}^{\bullet}\mathbf{x}_{d}, \mathbf{w}_d, \mathbf{u}_{d}, \mathbf{p},k_i)] +
+* Update previous values of discrete states of the corresponding model partition: latexmath:[{}^\bullet\mathbf{x}_{d,k_i} := \mathbf{x}_{d,k_i}].
+|<<fmi3ActivateModelPartition>>
+
+|====
+
+Allowed Function Calls::
+
+Function <<get-and-set-variable-values,`fmi3Set{VariableTypeExclClock}`>>::
+sets the values of variables with:
+* <<causality>> = <<input>>, or
+* <<causality>> = <<parameter>> and <<variability>> = <<tunable>>.
+
++
+This function can be called before scheduling a model partition for variables with the above properties and assigned to that model partition via its associated <<Clock>> and variables with the above properties and not associated with any <<Clock>>.
+
+Function <<get-and-set-variable-values,`fmi3Get{VariableTypeExclClock}`>>::
+These functions can be called after the computation of a model partition for variables assigned to that model partition via its associated <<Clock>> and all variables not associated with any <<Clock>>.
++
+Because of real-time constraints, the computational effort has to be predictable for all operations in Scheduled Execution.
+Therefore, all computationally expensive operations to compute a model partition have to be contained within the <<fmi3ActivateModelPartition>> function.
+The importer can assume that <<get-and-set-variable-values,`fmi3Get{VariableTypeExclClock}`>> and <<get-and-set-variable-values,`fmi3Set{VariableTypeExclClock}`>> operations are not computationally expensive, compared to <<fmi3ActivateModelPartition>>.
++
+It is not allowed to call <<get-and-set-variable-values,`fmi3Get{VariableTypeExclClock}`>> functions after <<get-and-set-variable-values,`fmi3Set{VariableTypeExclClock}`>> functions without an <<fmi3ActivateModelPartition>> call in between.
++
+_[It is recommended, to call <<get-and-set-variable-values,`fmi3Set{VariableTypeExclClock}`>>, <<fmi3ActivateModelPartition>> and <<get-and-set-variable-values,`fmi3Get{VariableTypeExclClock}`>> in a sequence._ +
+_The reason is to avoid different interpretations of the caching, since contrary to <<fmi-for-model-exchange, `FMI for Model Exchange`>>, <<fmi3ActivateModelPartition>> will perform the actual calculation instead of <<get-and-set-variable-values,`fmi3Get{VariableTypeExclClock}`>>, and therefore, algebraic loops at communication points cannot be handled by an appropriate sequence of <<get-and-set-variable-values,`fmi3Get{VariableTypeExclClock}`>> and <<get-and-set-variable-values,`fmi3Set{VariableTypeExclClock}`>> calls as for Model Exchange._ +
+_To avoid data inconsistencies and safeguard predictable behavior with <<get-and-set-variable-values,`fmi3Get{VariableType}`>>, <<get-and-set-variable-values,`fmi3Set{VariableType}`>> a unique assignment of the respective variables to model partitions via its associated <<Clock>> is strongly recommended.]_
+
+Function <<fmi3GetDirectionalDerivative>>::
+See <<fmi3GetDirectionalDerivative>>.
+
+Function <<fmi3GetAdjointDerivative>>::
+See <<fmi3GetAdjointDerivative>>.
+
+[[fmi3ActivateModelPartition, `fmi3ActivateModelPartition`]]
+Function `fmi3ActivateModelPartition`::
+
+Each <<fmi3ActivateModelPartition>> call relates to one <<inputClock>> which triggers the computation of its associated model partition.
++
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=ActivateModelPartition]
+----
++
+The <<fmi3ActivateModelPartition>> function has the following arguments:
+
+* [[clockReference,`clockReference`]] `clockReference`: <<valueReference>> of the <<inputClock>> associated with the model partition which shall be activated.
+
+* [[activationTime, `activationTime`]] `activationTime`: value of the <<independent>> variable of the assigned <<Clock>> tick time latexmath:[t_i] _[typically: simulation (i.e. virtual) time]_ (which is known to the simulation algorithm).
+
++
+The <<fmi3ActivateModelPartition>> function must not be called on <<outputClock,output Clocks>> of an FMU. +
+_[Note, that other than <<fmi3DoStep>> for Co-Simulation, <<fmi3ActivateModelPartition>> will compute the variables of the model partition for the current `activationTime`.]_ +
+Consecutive calls to <<fmi3ActivateModelPartition>> for a <<clockReference>> must have strictly monotonically increasing <<activationTime>>.
+
+Functions <<fmi3GetIntervalDecimal>> and <<fmi3GetIntervalFraction>>::
+These function calls are allowed for <<tunable-clock,`tunable`>> and <<changing-aperiodic-clock,`changing`>> aperiodic Clocks.
+
+[[fmi3ClockUpdateCallback,`fmi3ClockUpdateCallback`]]
+Function `fmi3ClockUpdateCallback`::
+
++
+[source, C]
+----
+include::../headers/fmi3FunctionTypes.h[tag=CallbackClockUpdate]
+----
++
+[[activateClockReferences,`activateClockReferences`]]
+<<fmi3ClockUpdateCallback>> switches the FMU itself into the <<ClockUpdateMode>>.
+The callback may be called from several <<model-partition, model partitions>>.
+
+Functions <<fmi3GetFMUState>>, <<fmi3SetFMUState>>, <<fmi3FreeFMUState>>, <<fmi3SerializedFMUStateSize>>, <<fmi3SerializeFMUState>>, <<fmi3DeserializeFMUState>>::
+These functions must not be called if any model partition is currently active or preempted.
+_[This is because these functions apply to the whole FMU and not only to a specific model partition.]_
+
+==== State: Clock Update Mode [[ClockUpdateMode,*Clock Update Mode*]]
+
+A model partition of a Scheduled Execution FMU calls <<fmi3ClockUpdateCallback>> to signal that a <<triggered, `triggered output`>> <<Clock>> ticked or a new interval for a <<countdown-aperiodic-clock,`countdown`>> <<Clock>> is available.
+
+This means that <<fmi3GetClock>> must be called for gathering all <<Clock>> related information about ticking <<outputClock,output Clocks>> and <<fmi3GetInterval>> must be called for all <<countdown-aperiodic-clock,`countdown`>> <<Clock,Clocks>> whose associated model partitions must be scheduled if a new interval is provided.
+
+Allowed Functions::
+
+Function <<fmi3GetClock>>::
+The importer calls <<fmi3GetClock>> to determine which <<triggered, triggered output clock>> is active. +
+For an <<outputClock>> only the first call of <<fmi3GetClock>> for a specific activation of this <<Clock>> signals `fmi3ClockActive`.
+The FMU sets the reported activation state immediately back to `fmi3ClockInactive` for following <<fmi3GetClock>> calls for that <<Clock>> until this <<outputClock>> is activated again.
+
+Functions <<fmi3GetIntervalDecimal>> & <<fmi3GetIntervalFraction>>::
+These function calls are allowed for <<countdown-aperiodic-clock,`countdown`>> Clocks.
+
+_[In Scheduled Execution it cannot be determined which model partition has called <<fmi3ClockUpdateCallback>>, because multiple model partitions can be active at the same time._
+_Since all information about which model partition to activate is coded into its corresponding Clock, there is no need to know which potentially other model partition activated this Clock.]_

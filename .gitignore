@@ -1,0 +1,11 @@
+# Artefactos de compilación de Rust/Cargo (a cualquier nivel).
+# También cubre los FMU generados, que van bajo target/fmu/.
+target/
+
+# IDE / editores / SO
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

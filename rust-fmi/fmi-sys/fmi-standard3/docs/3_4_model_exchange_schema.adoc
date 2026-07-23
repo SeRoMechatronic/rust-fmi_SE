@@ -1,0 +1,34 @@
+=== Description Schema [[model-exchange-schema]]
+
+XML elements and attributes common to all interface types are defined in <<modelDescription.xml,FMI Description Schema>>.
+Additional elements and attributes are defined subsequently.
+If the FMU implements the Model Exchange interface type, the element `<ModelExchange>` must be present.
+It is defined as:
+
+.ModelExchange element.
+[[figure-schema-ModelExchange]]
+image::images/schema/ModelExchange.png[width=80%, align="center"]
+
+The attribute in the following table is defined in addition to the <<common-capability-flags, common attributes>> and has the following meaning (all attributes are optional with exception of <<modelIdentifier>>):
+
+.ModelExchange attribute details.
+[[table-ModelExchange-details]]
+[cols="1,1",options="header"]
+|====
+|Attribute
+|Description
+
+|`needsCompletedIntegratorStep`
+|If `true`, the function <<fmi3CompletedIntegratorStep>> must be called after every completed integrator step.
+If `false` and the function is called anyway, it has no effect.
+
+|====
+
+==== Example Model Description File [[xml-example-model-exchange]]
+
+When generating an FMU from the hypothetical model `MyLibrary.SpringMassDamper`, the XML file may have the following content:
+
+[source, xml]
+----
+include::examples/model_exchange.xml[]
+----

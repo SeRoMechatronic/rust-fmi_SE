@@ -1,0 +1,40 @@
+[package]
+name = "fmi-schema"
+version = "0.7.0"
+description = "XML schema support for FMI 2.0 and 3.0"
+readme = "README.md"
+authors.workspace = true
+categories.workspace = true
+edition.workspace = true
+homepage.workspace = true
+include.workspace = true
+keywords.workspace = true
+license.workspace = true
+publish = true
+repository.workspace = true
+
+[features]
+default = ["fmi2", "fmi3"]
+## Enable support for FMI 2.0
+fmi2 = []
+## Enable support for FMI 3.0
+fmi3 = []
+## Enable support for Apache Arrow Schema
+arrow = ["dep:arrow"]
+## Enable serde support for deserialization
+serde = ["dep:serde"]
+
+[dependencies]
+arrow = { workspace = true, optional = true }
+chrono = { version = "0.4" }
+document-features = { workspace = true }
+hard-xml = { version = "1.41" }
+itertools = "0.14"
+lenient_semver = "0.4"
+semver = "1.0"
+serde = { version = "1.0", features = ["derive"], optional = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+env_logger = "0.8"
+hard-xml = { version = "1.41", features = ["log"] }

@@ -1,0 +1,110 @@
+== Introduction [[introduction]]
+
+=== Intent of This Document [[introduction-intent-of-this-document]]
+
+Automotive CAN, LIN, FlexRay, CAN FD, CAN XL and Ethernet are network technologies that have been applied successfully over many years by all automotive OEMs worldwide.
+Virtualizing electronic control units (ECUs) and then simulating multiple such virtual ECUs requires connecting them using a virtual version of these network technologies.
+
+This layered standard defines what input and output variables and which FMI 3.0 features are used and how to emulate a transport layer for such network traffic.
+At this point it should be explicitly mentioned that this layered standard not only relates to automotive buses, but can also be extended to buses from other domains in the future.
+
+There are mainly two base use cases envisioned here:
+
+* Physical Signal Abstraction (or High-Cut) to simply transport physical signal values between virtual ECUs. +
+The network properties are largely idealized: Infinite bandwidth, zero-delay etc.
+Signals, groups of signals and their properties _(e.g., units)_ are usually derived from existing and validated standard network topology description formats, such as DBC, LDF, Fibex and ARXML.
+* Network Abstraction (or Low-Cut) to realize virtualized bus driver implementations footnote:[In AUTOSAR context this means a driver implementation within the MicroController Abstraction Layer (MCAL)]. +
+This transport layer emulation allows anything from idealized to more detailed network simulations, including bandwidth restrictions, message arbitration and delays.
+It forwards the network payloads using binary variables.
+The Low-Cut abstraction layer is meant to allow virtualized bus driver implementations, including feedback from the physical drivers about transmission status or network node states.
+Since the Network Abstraction layer is protocol-independent, it can also be used for the simulation of non-automotive control units, _e.g., from the field of industrial automation_.
+
+So that this layered standard can be supported in a variety of FMU importers and other types of simulators three possible communication architectures for bus communication are specified:
+
+* Direct Communication: Limited to exactly two FMUs and uses a common FMU importer that does not require any special features for simulating buses.
+The importer only needs to support FMI variables, Clocks, and terminals, which are sufficient to emulate bus communication between the FMUs.
+Note, even though Clocks are listed in the `ModelVariables` element in the `modelDescription.xml` of the FMU, Clocks will be treated differently than all other variables.
+In this document we will call variables of type Clock 'Clocks', and all variables that are not Clocks 'variables'.
+* Composition with dedicated Bus Simulation FMU: A separate Bus Simulation FMU is used to simulate the specific bus behavior.
+Other FMUs that want to emulate bus communication provide and relate network information via this Bus Simulation FMU.
+This communication architecture can be operated by a common FMU importer and allows complex and detailed bus simulations.
+* Importer with integrated Bus Simulation: Works analogously to the Composition with dedicated Bus Simulation FMU architecture, whereby the Bus Simulation FMU is directly integrated into an importer or other simulator.
+
+=== System Simulation Effects [[introduction-system-simulation-effects]]
+
+This standard allows a highly accurate bus simulation using FMI 3.0 mechanisms.
+To profit from such accuracy on a system level to predict system behavior, all system simulation components must provide at least that level of accuracy.
+When focusing on single virtual ECU use cases, such as protocol validation, the accuracy requirements for the rest of the system can be relaxed.
+
+Contrary, on system level, the accuracy of the simulation depends on the accuracy of all its components.
+These components can be virtual ECUs, plant models, residual bus simulators, data replay components and, of course, the bus simulation.
+A single low-accuracy component limits the overall system simulation accuracy.
+The level of detail of these runtime models determine the size of the window for data transmission events.
+With virtual ECUs using the zero-time execution model footnote:[Simulated tasks are executed infinitely fast.], the time of data transmission can only be determined to be somewhere within the given smallest granularity of the virtual ECU's internal scheduler.
+More detailed models, like instruction set simulators or even System-C models of the hardware, can narrow the window for these events significantly.
+However, current modelling technologies, as of writing this standard, do not allow practical implementations in terms of modelling time and runtime of virtual ECUs that can be used to simulate all realistic bus simulation effects, such as collision and arbitration events.
+
+=== How to Read This Document [[introduction-how-to-read-this-document]]
+
+Conventions used in this document:
+
+ - Non-normative text is given in square brackets in italic font: _[Especially examples are defined in this style.]_
+ - The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in <<RFC2119>> (regardless of formatting and capitalization).
+
+In key parts of this document, non-normative examples are used to help understand the standard.
+To keep the standard itself brief, the https://modelica.github.io/fmi-ls-bus-guides/main/ls-bus-guide/[FMI LS BUS Implementer’s Guide] was created.
+It contains further technical discussions and examples on how to implement certain aspects of the standard for both FMUs and importers.
+Contrary to the standard, the FMI LS BUS Implementer’s Guide will be a living document, enhanced with further tips and tricks as the FMI community encounters them.
+
+=== Remarks [[introduction-remarks]]
+
+This layered standard currently only refers to the FMI for Co-Simulation (CS).
+At the current time, Model Exchange (ME) and Scheduled Execution (SE) are not taken into account.
+All explanations in this document are therefore to be understood in the context of FMI for Co-Simulation (CS).
+
+== Layered Standard Manifest File [[layered-standard-manifest-file]]
+
+This layered standard defines requires the use of a layered standard manifest file and <<table-schema-fmi-ls-bus-attributes>> shows the content of `fmi-ls-manifest.xml`.
+
+.Attribute Details.
+[[table-schema-fmi-ls-bus-attributes]]
+[cols="1,1,1,2",options="header"]
+|====
+|Attribute
+|Namespace
+|Value
+|Description
+
+|`fmi-ls-name`
+| `\http://fmi-standard.org/fmi-ls-manifest`
+| `org.fmi-standard.fmi-ls-bus`
+| Name of the layered standard in reverse domain name notation.
+
+|`fmi-ls-version`
+| `\http://fmi-standard.org/fmi-ls-manifest`
+| `1.1.0-beta.1`
+| Version of the layered standard. This layered standard uses semantic versioning, as defined in <<PW13>>.
+
+|`fmi-ls-description`
+| `\http://fmi-standard.org/fmi-ls-manifest`
+| `Layered Standard for the simulation of bus communication on a Physical Signal Abstraction or Network Abstraction based level.`
+| String with a brief description of the layered standard that is suitable for display to users.
+
+|`isBusSimulationFMU`
+|
+| `true` or `false`
+| Defines whether the respective FMU is a Bus Simulation FMU or not.
+The importer may use this information at the time of importing the FMU, depending on which <<common-concepts-system-compositions, System Compositions>> the FMUs are integrated into.
+If `true`, this FMU represents a Bus Simulation FMU.
+Default: `false`.
+
+|====
+
+An example of a manifest file for this layered standard is shown below:
+
+[source, xml]
+----
+include::examples/fmi_ls_bus_manifest_example.xml[]
+----
+
+The manifest file shall be stored inside the FMU at the following path: `/extra/org.fmi-standard.fmi-ls-bus/fmi-ls-manifest.xml`.

@@ -1,0 +1,108 @@
+name: Build Spec
+
+on:
+  push:
+    branches-ignore:
+      - 'temp/*'
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - 'main'
+      - 'v3.0.x'
+      - 'v2.0.x'
+
+jobs:
+  
+  build-code-snippets:
+    runs-on: ubuntu-20.04
+    steps:
+
+    - uses: actions/checkout@v3
+
+    - name: Build code snippets
+      run: |
+        mkdir docs/examples/build
+        cd docs/examples/build
+        cmake ..
+        cmake --build .
+
+  generate-schema-figures:
+    runs-on: windows-2022
+    steps:
+
+    - uses: actions/checkout@v3
+    
+    - run: |
+        PowerShell -ExecutionPolicy Bypass -Command ./generate_figures.ps1
+
+    - name: Create ZIP archive
+      uses: actions/upload-artifact@v3
+      with:
+        name: schema-figures
+        path: docs/images/schema/*.png
+        if-no-files-found: error
+
+  generate-html:
+    runs-on: ubuntu-20.04
+    needs: [generate-schema-figures]
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - uses: actions/download-artifact@v3
+      with:
+        name: schema-figures
+        path: docs/images/schema
+
+    - name: Generate revnumber
+      run: |
+        [[ $GITHUB_REF_TYPE == "tag" ]] && REVNUMBER=${GITHUB_REF:11} || REVNUMBER=${GITHUB_SHA:0:7}
+        echo GITHUB_SHA:      $GITHUB_SHA
+        echo GITHUB_REF_TYPE: $GITHUB_REF_TYPE
+        echo GITHUB_REF:      $GITHUB_REF
+        echo REVNUMBER:       $REVNUMBER
+        echo "REVNUMBER=$REVNUMBER" >> $GITHUB_ENV
+
+    - name: Create build directory
+      run: |
+        mkdir -p build/headers
+        mkdir -p build/schema
+        mkdir -p build/images/schema
+
+    - name: Generate HTML
+      uses: avattathil/asciidoctor-action@master
+      with:
+        program: "asciidoctor --base-dir . --destination-dir=build --backend=html5 --attribute=revnumber=${{ env.REVNUMBER }} --attribute=revdate=$(date +%F) docs/index.adoc"
+
+    - name: Copy resources
+      run: |
+        cp LICENSE.txt build
+        cp headers/*.h build/headers
+        cp schema/*.xsd build/schema
+        cp docs/images/favicon.ico build/images
+        cp docs/images/*.svg build/images
+        cp docs/images/schema/*.png build/images/schema
+
+    - name: Create ZIP archive
+      uses: actions/upload-artifact@v3
+      with:
+        name: FMI-Specification
+        path: build/*
+        if-no-files-found: error
+
+    - name: Push HTML to fmi-standard.org
+      if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      uses: cpina/github-action-push-to-another-repository@v1.5
+      env:
+        SSH_DEPLOY_KEY: ${{ secrets.SSH_DEPLOY_KEY }}
+      with:
+        source-directory: 'build'
+        destination-github-username: 'modelica'
+        destination-repository-name: 'fmi-standard.org'
+        user-email: ci@fmi-standard
+        target-branch: main
+        target-directory: static/docs/main

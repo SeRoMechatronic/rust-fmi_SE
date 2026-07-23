@@ -1,0 +1,17 @@
+[package]
+name = "semaforo_se"
+version = "0.1.0"
+edition = "2021"
+description = "Semáforo aperiódico (DEVS) — FMI 3.0 Scheduled Execution con reloj countdown, generado con fmi-export"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Ahora se genera con la macro derive de fmi-export (igual que el motor térmico),
+# en lugar de escribir el ABI FMI 3.0 SE a mano.
+[dependencies]
+fmi        = { path = "../rust-fmi/fmi",        features = ["fmi3"], default-features = false }
+fmi-export = { path = "../rust-fmi/fmi-export", features = ["fmi3"] }
+
+[package.metadata.fmu]
+default_experiment = { start_time = "0", stop_time = "180", step_size = "1" }

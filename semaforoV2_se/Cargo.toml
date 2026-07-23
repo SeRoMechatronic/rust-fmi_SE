@@ -1,0 +1,16 @@
+[package]
+name = "semaforoV2_se"
+version = "0.1.0"
+edition = "2021"
+description = "Semáforo V2 — FMI 3.0 Scheduled Execution (reloj countdown), generado con fmi-export"
+
+[lib]
+# cdylib = la FMU (.dll/.so); rlib = para poder enlazar el crate desde examples/ (el simulador).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fmi        = { path = "../rust-fmi/fmi",        features = ["fmi3"], default-features = false }
+fmi-export = { path = "../rust-fmi/fmi-export", features = ["fmi3"] }
+
+[package.metadata.fmu]
+default_experiment = { start_time = "0", stop_time = "180", step_size = "1" }

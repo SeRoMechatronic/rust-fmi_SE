@@ -1,0 +1,135 @@
+//! Test FMI 2.0 schema by parsing the FMI2.xml file.
+
+#[test]
+#[cfg(feature = "fmi2")]
+fn test_fmi2() {
+    use fmi_schema::{
+        fmi2::{BaseUnit, Fmi2ModelDescription, SimpleTypeElement},
+        traits::FmiInterfaceType,
+    };
+    use std::str::FromStr;
+
+    let test_file = std::env::current_dir()
+        .map(|path| path.join("tests/FMI2.xml"))
+        .unwrap();
+    let contents = std::fs::read_to_string(test_file).unwrap();
+    let md = Fmi2ModelDescription::from_str(&contents).unwrap();
+
+    assert_eq!(md.fmi_version, "2.0");
+    assert_eq!(md.model_name, "BouncingBall");
+    assert_eq!(
+        md.description.as_deref(),
+        Some(
+            "This model calculates the trajectory, over time, of a ball dropped from a height of 1 m."
+        )
+    );
+    assert_eq!(md.guid, "{8c4e810f-3df3-4a00-8276-176fa3c9f003}");
+    assert_eq!(md.number_of_event_indicators, Some(1));
+
+    let me = md.model_exchange.unwrap();
+    assert_eq!(me.model_identifier(), "BouncingBall");
+    assert_eq!(me.needs_execution_tool(), None);
+    assert_eq!(me.can_be_instantiated_only_once_per_process(), None);
+    assert_eq!(me.can_get_and_set_fmu_state(), Some(true));
+    assert_eq!(me.can_serialize_fmu_state(), Some(true));
+    assert_eq!(me.provides_directional_derivatives(), None);
+    assert_eq!(me.provides_adjoint_derivatives(), None);
+    assert_eq!(me.provides_per_element_dependencies(), None);
+    assert_eq!(me.can_not_use_memory_management_functions, Some(true));
+    assert_eq!(me.source_files.unwrap().files[0].name, "all.c");
+
+    let cs = md.co_simulation.unwrap();
+    assert_eq!(cs.model_identifier(), "BouncingBall");
+    assert_eq!(cs.needs_execution_tool(), None);
+    assert_eq!(cs.can_be_instantiated_only_once_per_process(), None);
+    assert_eq!(cs.can_get_and_set_fmu_state(), Some(true));
+    assert_eq!(cs.can_serialize_fmu_state(), Some(true));
+    assert_eq!(cs.provides_directional_derivatives(), None);
+    assert_eq!(cs.provides_adjoint_derivatives(), None);
+    assert_eq!(cs.provides_per_element_dependencies(), None);
+    assert_eq!(cs.can_handle_variable_communication_step_size, Some(true));
+    assert_eq!(cs.can_not_use_memory_management_functions, Some(true));
+    assert_eq!(cs.source_files.unwrap().files[0].name, "all.c");
+
+    let units = md.unit_definitions.unwrap();
+    assert_eq!(units.units.len(), 3);
+    assert_eq!(units.units[0].name, "m");
+    assert_eq!(
+        units.units[0].base_unit,
+        Some(BaseUnit {
+            m: Some(1),
+            ..Default::default()
+        })
+    );
+
+    let typedefs = md.type_definitions.unwrap();
+    assert_eq!(typedefs.types.len(), 3);
+    assert_eq!(typedefs.types[0].name, "Position");
+    assert!(matches!(typedefs.types[0].elem, SimpleTypeElement::Real(_)));
+}
+
+#[test]
+#[cfg(feature = "fmi2")]
+fn test_fmi2_co_simulation_without_event_indicators() {
+    use std::str::FromStr;
+
+    let xml = r#"
+<fmiModelDescription fmiVersion="2.0" modelName="CsOnly" guid="{00000000-0000-0000-0000-000000000000}">
+    <CoSimulation modelIdentifier="CsOnly" />
+    <ModelVariables />
+    <ModelStructure />
+</fmiModelDescription>
+"#;
+
+    let md = fmi_schema::fmi2::Fmi2ModelDescription::from_str(xml).unwrap();
+    assert!(md.model_exchange.is_none());
+    assert!(md.co_simulation.is_some());
+    assert_eq!(md.number_of_event_indicators, None);
+    assert_eq!(md.num_event_indicators(), 0);
+}
+
+#[test]
+#[cfg(feature = "fmi2")]
+fn test_fmi2_with_vendor_annotations() {
+    use std::str::FromStr;
+
+    let xml = r#"
+<fmiModelDescription fmiVersion="2.0" modelName="VendorAnnotated" guid="{11111111-1111-1111-1111-111111111111}">
+    <CoSimulation modelIdentifier="VendorAnnotated" />
+    <VendorAnnotations>
+        <Tool name="Simulink">
+            <SomeToolSpecificMetadata key="value" />
+        </Tool>
+    </VendorAnnotations>
+    <ModelVariables />
+    <ModelStructure />
+</fmiModelDescription>
+"#;
+
+    let md = fmi_schema::fmi2::Fmi2ModelDescription::from_str(xml).unwrap();
+    assert_eq!(md.model_name, "VendorAnnotated");
+    assert!(md.co_simulation.is_some());
+}
+
+#[test]
+#[cfg(feature = "fmi2")]
+fn test_fmi2_allows_optional_author_attribute() {
+    use std::str::FromStr;
+
+    let xml = r#"
+<fmiModelDescription
+    fmiVersion="2.0"
+    modelName="WithAuthor"
+    guid="{00000000-0000-0000-0000-000000000000}"
+    author="Example Author, Example Org">
+    <ModelExchange modelIdentifier="WithAuthor" />
+    <ModelVariables />
+    <ModelStructure />
+</fmiModelDescription>
+"#;
+
+    let md = fmi_schema::fmi2::Fmi2ModelDescription::from_str(xml).unwrap();
+
+    assert_eq!(md.author.as_deref(), Some("Example Author, Example Org"));
+    assert!(md.model_exchange.is_some());
+}

@@ -1,0 +1,26 @@
+{
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+	"features": {
+		"ghcr.io/devcontainers/features/rust:1": {}
+	},
+	"hostRequirements": {
+		"cpus": 4
+	},
+	"onCreateCommand": "git submodule update --init --recursive",
+	"waitFor": "onCreateCommand",
+	"updateContentCommand": "sudo apt-get update && sudo apt-get install -y liblapack3 libclang-dev",
+	"postCreateCommand": "rustc --version",
+	"postAttachCommand": {},
+	"customizations": {
+		"codespaces": {
+			"openFiles": [
+				"src/lib.rs"
+			]
+		},
+		"vscode": {
+			"extensions": [
+				"rust-lang.rust-analyzer"
+			]
+		}
+	}
+}
