@@ -53,10 +53,12 @@ rust-fmi_SE/
 │   └── …
 ├── src/lib.rs + Cargo.toml    ← ejemplo: motor térmico (Co-Simulation)
 ├── semaforo_se/               ← ejemplo: semáforo aperiódico (SE), 60/30 s
-└── semaforoV2_se/             ← ejemplo: semáforo V2 (SE), 30/15 s
-    ├── src/lib.rs             ← el modelo
-    ├── examples/simular.rs    ← mini-planificador SE para simular el comportamiento
-    └── GUIA_PASO_A_PASO.md    ← tutorial: cómo crear una FMU de SE desde cero
+├── semaforoV2_se/             ← ejemplo: semáforo V2 (SE), 30/15 s
+│   ├── src/lib.rs             ← el modelo
+│   ├── examples/simular.rs    ← mini-planificador SE para simular el comportamiento
+│   └── GUIA_PASO_A_PASO.md    ← tutorial: cómo crear una FMU de SE desde cero
+├── boton_pwm_cs/              ← ejemplo: generador de botón, pulso/PWM/escalón (CS)
+└── acoplado_sim/              ← CO-SIMULACIÓN ACOPLADA: generador (CS) + semáforo (SE)
 ```
 
 > Cada carpeta de ejemplo es un crate independiente que depende de `rust-fmi/` por rutas
@@ -121,9 +123,65 @@ por su ABI C real — el mismo rol que hará un orquestador externo.
 | `src/` (motor térmico) | Co-Simulation | Modelo continuo (calentamiento con la carga), generado con `#[derive(FmuModel)]`. |
 | `semaforo_se/` | Scheduled Execution | Semáforo aperiódico DEVS (rojo 60 s / verde 30 s, botón → 15 s) con reloj countdown. |
 | `semaforoV2_se/` | Scheduled Execution | Igual pero 30/15/20 s; incluye tutorial y simulador de ejemplo. |
+| `boton_pwm_cs/` | Co-Simulation | Generador de señal de botón: pulso único, PWM o escalón (parametrizable). |
+| `acoplado_sim/` | — (orquestador) | Co-simula las dos FMUs juntas; referencia de cómo acoplar CS ↔ SE. |
 
 Para aprender a construir una FMU de SE desde cero, sigue
 [`semaforoV2_se/GUIA_PASO_A_PASO.md`](semaforoV2_se/GUIA_PASO_A_PASO.md).
+
+---
+
+## Co-simulación acoplada CS ↔ SE (`acoplado_sim/`)
+
+Conecta el generador de botón (CS) con el semáforo (SE):
+
+```text
+boton_pwm_cs.salida (VR 5)  ──►  semaforoV2_se.boton (VR 1)
+```
+
+```bash
+cd boton_pwm_cs  && cargo build && cd ..     # genera boton_pwm_cs.dll
+cd semaforoV2_se && cargo build && cd ..     # genera semaforoV2_se.dll
+cd acoplado_sim  && cargo run
+```
+
+Traza real (semáforo 30/15 s, botón → rojo de 20 s en total; generador con pulso de 2 s
+cada 40 s desde t=8):
+
+```text
+  t (s) | fase    |  σ (s) | botón | evento
+  ------+---------+--------+-------+------------------------------
+    0.0 | 🔴 ROJO  |   30.0 |    0  | inicio
+    8.0 | 🔴 ROJO  |   12.0 |    1  | δext: 👆 BOTÓN pulsado     ← σ = 20-8
+   20.0 | 🟢 VERDE |   15.0 |    0  | δint: fin de fase          ← rojo duró 20 s
+   35.0 | 🔴 ROJO  |   30.0 |    0  | δint: fin de fase
+   48.0 | 🔴 ROJO  |    7.0 |    1  | δext: 👆 BOTÓN pulsado     ← σ = 20-13
+   55.0 | 🟢 VERDE |   15.0 |    0  | δint: fin de fase          ← rojo duró 20 s
+  …
+  128.0 | 🔴 ROJO  |    0.0 |    1  | δext: 👆 BOTÓN pulsado     ← rojo ya llevaba 23 s
+  128.0 | 🟢 VERDE |   15.0 |    1  | δint: fin de fase          ← cambio INMEDIATO
+```
+
+### ⚠️ Las dos reglas críticas al acoplar CS con SE
+
+Si vas a escribir tu propio orquestador, esto es lo que hay que respetar:
+
+1. **Una FMU SE solo reacciona cuando se activa su partición.** No basta con escribirle la
+   entrada con `fmi3SetFloat64`: hay que llamar a `fmi3ActivateModelPartition` **en el
+   instante en que la entrada cambia** (δext). Si solo se activa al vencer el countdown, la
+   pulsación del botón **no tiene ningún efecto**.
+2. **Hay que releer `fmi3GetIntervalDecimal` después de CADA activación** (interna o
+   externa) y reprogramar el próximo evento en `t + σ`.
+
+Es decir, el planificador fusiona **dos fuentes de eventos**: el countdown del semáforo
+(δint) y los flancos de la entrada procedente del CS (δext).
+
+### Nota: dos FMUs no se pueden enlazar en un mismo binario
+
+Cada FMU exporta los mismos símbolos C (`fmi3GetFloat64`, `fmi3Terminate`, …), así que
+enlazar dos crates de FMU en un ejecutable da error de *símbolo duplicado*. Por eso
+`acoplado_sim` las **carga como bibliotecas dinámicas en tiempo de ejecución**
+(`libloading`), que es lo que hace cualquier orquestador real.
 
 ---
 

@@ -1,0 +1,11 @@
+[package]
+name = "acoplado_sim"
+version = "0.1.0"
+edition = "2021"
+description = "Co-simulación acoplada: generador de botón (CS) + semáforo (SE) — referencia para SeRo_CoSim"
+
+# Carga cada FMU como biblioteca dinámica en tiempo de ejecución (como un orquestador real).
+# NO se enlazan los crates de las FMUs: ambas exportan los mismos símbolos C
+# (fmi3GetFloat64, fmi3Terminate, …) y el enlazador daría "símbolo duplicado".
+[dependencies]
+libloading = "0.8"

@@ -1,0 +1,16 @@
+[package]
+name = "boton_pwm_cs"
+version = "0.1.0"
+edition = "2021"
+description = "Generador de señal de botón (pulso / PWM / escalón) — FMI 3.0 Co-Simulation"
+
+[lib]
+# cdylib = la FMU (.dll/.so); rlib = para poder enlazarla desde examples/ (simulaciones).
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+fmi        = { path = "../rust-fmi/fmi",        features = ["fmi3"], default-features = false }
+fmi-export = { path = "../rust-fmi/fmi-export", features = ["fmi3"] }
+
+[package.metadata.fmu]
+default_experiment = { start_time = "0", stop_time = "180", step_size = "0.5" }
