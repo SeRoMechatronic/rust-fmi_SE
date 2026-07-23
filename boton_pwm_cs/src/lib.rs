@@ -1,19 +1,26 @@
-//! GENERADOR DE SEÑAL DE BOTÓN — FMU FMI 3.0 **Co-Simulation**.
+//! GENERADOR DE PULSACIONES DE BOTÓN — FMU FMI 3.0 **Co-Simulation**.
 //!
-//! Produce una señal 0/`amplitud` pensada para alimentar la entrada `boton` del semáforo
-//! de Scheduled Execution (`semaforoV2_se`). Con tres parámetros cubre los casos típicos:
+//! Produce una señal 0/`amplitud` con hasta **4 pulsaciones en instantes que tú eliges**,
+//! pensada para alimentar la entrada `boton` del semáforo de Scheduled Execution.
 //!
-//! | Caso                         | Configuración                                     |
-//! |------------------------------|---------------------------------------------------|
-//! | **Pulso único** (botón real) | `periodo = 0` → un pulso en `t_inicio`, de `ancho_pulso` s |
-//! | **PWM** (pulsos repetidos)   | `periodo > 0` → un pulso de `ancho_pulso` s cada `periodo` s |
-//! | **Escalón**                  | `periodo = 0` y `ancho_pulso` muy grande → sube en `t_inicio` y se queda |
+//! Cada pulsación `t_pulsoN` dispara un pulso de `ancho_pulso` segundos. Un valor
+//! **negativo** desactiva esa pulsación, así que puedes usar 1, 2, 3 o 4.
 //!
-//! La salida vale `amplitud` (por defecto 1.0) durante el pulso y 0.0 el resto del tiempo.
+//! | Quiero…                        | Configuración                                  |
+//! |--------------------------------|------------------------------------------------|
+//! | 4 pulsaciones repartidas       | `t_pulso1..4` = los instantes que quieras       |
+//! | solo 2 pulsaciones             | `t_pulso3 = -1`, `t_pulso4 = -1`                |
+//! | un escalón (sube y se queda)   | `t_pulso1 = T`, `ancho_pulso` enorme (p.ej. 1e9)|
+//!
+//! Valores por defecto: pulsaciones a los **8, 45, 95 y 118 s**, de 2 s cada una.
+//! Están elegidas para caer dentro de fases ROJAS del semáforo y así demostrar los
+//! tres comportamientos: acortar el rojo, cambio inmediato (botón tardío) y otro
+//! acortamiento.
+//!
 //! El semáforo interpreta `boton >= 0.5` como "pulsado".
 //!
-//! Valores por defecto: primer pulso a los 8 s (durante el primer rojo), de 2 s de ancho,
-//! repitiéndose cada 40 s.
+//! Value References: `t_pulso1`=1, `t_pulso2`=2, `t_pulso3`=3, `t_pulso4`=4,
+//! `ancho_pulso`=5, `amplitud`=6, **`salida`=7**.
 
 use fmi::fmi3::{Fmi3Error, Fmi3Res};
 use fmi_export::{
@@ -24,19 +31,27 @@ use fmi_export::{
 #[derive(FmuModel, Default, Debug)]
 #[model(model_exchange = false, co_simulation = true, user_model = false)]
 pub struct BotonPwm {
-    /// Instante del primer pulso [s].
+    /// Instante de la 1ª pulsación [s]. Negativo = desactivada.
     #[variable(causality = Parameter, variability = Fixed, start = 8.0, initial = Exact)]
-    t_inicio: f64,
+    t_pulso1: f64,
 
-    /// Periodo de repetición [s]. `0` (o negativo) = un solo pulso.
-    #[variable(causality = Parameter, variability = Fixed, start = 40.0, initial = Exact)]
-    periodo: f64,
+    /// Instante de la 2ª pulsación [s]. Negativo = desactivada.
+    #[variable(causality = Parameter, variability = Fixed, start = 45.0, initial = Exact)]
+    t_pulso2: f64,
 
-    /// Duración del pulso en alto [s].
+    /// Instante de la 3ª pulsación [s]. Negativo = desactivada.
+    #[variable(causality = Parameter, variability = Fixed, start = 95.0, initial = Exact)]
+    t_pulso3: f64,
+
+    /// Instante de la 4ª pulsación [s]. Negativo = desactivada.
+    #[variable(causality = Parameter, variability = Fixed, start = 118.0, initial = Exact)]
+    t_pulso4: f64,
+
+    /// Duración de cada pulsación [s].
     #[variable(causality = Parameter, variability = Fixed, start = 2.0, initial = Exact)]
     ancho_pulso: f64,
 
-    /// Valor de la señal durante el pulso (el semáforo pulsa con >= 0.5).
+    /// Valor de la señal durante la pulsación (el semáforo pulsa con >= 0.5).
     #[variable(causality = Parameter, variability = Fixed, start = 1.0, initial = Exact)]
     amplitud: f64,
 
@@ -48,24 +63,17 @@ pub struct BotonPwm {
 impl BotonPwm {
     /// Valor de la señal en el instante `t` (función pura: la FMU no tiene estado).
     fn senal_en(&self, t: f64) -> f64 {
-        // Antes del primer pulso: apagado.
-        if t < self.t_inicio || self.ancho_pulso <= 0.0 {
+        if self.ancho_pulso <= 0.0 {
             return 0.0;
         }
-        let transcurrido = t - self.t_inicio;
-
-        // periodo <= 0 → un único pulso (o escalón, si el ancho es enorme).
-        let fase = if self.periodo > 0.0 {
-            transcurrido % self.periodo
-        } else {
-            transcurrido
-        };
-
-        if fase < self.ancho_pulso {
-            self.amplitud
-        } else {
-            0.0
+        let pulsaciones = [self.t_pulso1, self.t_pulso2, self.t_pulso3, self.t_pulso4];
+        for tp in pulsaciones {
+            // Negativo = pulsación desactivada.
+            if tp >= 0.0 && t >= tp && t < tp + self.ancho_pulso {
+                return self.amplitud;
+            }
         }
+        0.0
     }
 }
 
@@ -100,54 +108,55 @@ fmi_export::export_fmu!(BotonPwm);
 mod tests {
     use super::*;
 
-    /// Config por defecto: pulso de 2 s cada 40 s, empezando en t=8.
+    /// Config por defecto: pulsaciones a 8, 45, 95 y 118 s, de 2 s.
     fn gen() -> BotonPwm {
         let mut g = BotonPwm::default();
-        g.t_inicio = 8.0;
-        g.periodo = 40.0;
+        g.t_pulso1 = 8.0;
+        g.t_pulso2 = 45.0;
+        g.t_pulso3 = 95.0;
+        g.t_pulso4 = 118.0;
         g.ancho_pulso = 2.0;
         g.amplitud = 1.0;
         g
     }
 
     #[test]
-    fn apagado_antes_del_inicio() {
+    fn apagado_fuera_de_las_pulsaciones() {
         let g = gen();
         assert_eq!(g.senal_en(0.0), 0.0);
         assert_eq!(g.senal_en(7.9), 0.0);
+        assert_eq!(g.senal_en(30.0), 0.0);
+        assert_eq!(g.senal_en(199.0), 0.0);
     }
 
     #[test]
-    fn pulso_en_la_ventana() {
+    fn cada_pulsacion_dura_su_ancho() {
         let g = gen();
-        assert_eq!(g.senal_en(8.0), 1.0, "empieza el pulso");
-        assert_eq!(g.senal_en(9.5), 1.0, "dentro del pulso");
-        assert_eq!(g.senal_en(10.0), 0.0, "el pulso ya acabó (ancho 2 s)");
+        for tp in [8.0, 45.0, 95.0, 118.0] {
+            assert_eq!(g.senal_en(tp), 1.0, "inicio del pulso en {tp}");
+            assert_eq!(g.senal_en(tp + 1.9), 1.0, "dentro del pulso en {tp}");
+            assert_eq!(g.senal_en(tp + 2.0), 0.0, "el pulso acabó en {tp}");
+        }
     }
 
     #[test]
-    fn se_repite_cada_periodo() {
-        let g = gen();
-        assert_eq!(g.senal_en(48.0), 1.0, "segundo pulso a los 8+40");
-        assert_eq!(g.senal_en(49.5), 1.0);
-        assert_eq!(g.senal_en(50.5), 0.0);
-        assert_eq!(g.senal_en(88.0), 1.0, "tercer pulso a los 8+80");
-    }
-
-    #[test]
-    fn pulso_unico_si_periodo_cero() {
+    fn negativo_desactiva_la_pulsacion() {
         let mut g = gen();
-        g.periodo = 0.0;
-        assert_eq!(g.senal_en(8.5), 1.0, "el único pulso");
-        assert_eq!(g.senal_en(10.5), 0.0);
-        assert_eq!(g.senal_en(48.5), 0.0, "no se repite");
+        g.t_pulso3 = -1.0;
+        g.t_pulso4 = -1.0;
+        assert_eq!(g.senal_en(8.5), 1.0, "la 1ª sigue activa");
+        assert_eq!(g.senal_en(45.5), 1.0, "la 2ª sigue activa");
+        assert_eq!(g.senal_en(95.5), 0.0, "la 3ª está desactivada");
+        assert_eq!(g.senal_en(118.5), 0.0, "la 4ª está desactivada");
     }
 
     #[test]
-    fn escalon() {
+    fn escalon_con_ancho_enorme() {
         let mut g = gen();
-        g.periodo = 0.0;
-        g.ancho_pulso = 1.0e9; // "para siempre"
+        g.t_pulso2 = -1.0;
+        g.t_pulso3 = -1.0;
+        g.t_pulso4 = -1.0;
+        g.ancho_pulso = 1.0e9;
         assert_eq!(g.senal_en(7.9), 0.0);
         assert_eq!(g.senal_en(8.0), 1.0);
         assert_eq!(g.senal_en(1000.0), 1.0, "se queda arriba");

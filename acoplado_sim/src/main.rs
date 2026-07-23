@@ -3,7 +3,7 @@
 //! Es una **referencia ejecutable de lo que debe hacer SeRo_CoSim**. Conecta:
 //!
 //! ```text
-//!   boton_pwm_cs.salida (VR 5)  ──►  semaforoV2_se.boton (VR 1)
+//!   boton_pwm_cs.salida (VR 7)  ──►  semaforoV2_se.boton (VR 1)
 //! ```
 //!
 //! # Por qué se cargan las FMUs como DLL (y no se enlazan)
@@ -175,11 +175,13 @@ impl Fmu {
 }
 
 // ── Value References (del modelDescription.xml de cada FMU) ───────────────────
-// Generador (CS): time=0, t_inicio=1, periodo=2, ancho_pulso=3, amplitud=4, salida=5
-const VR_GEN_T_INICIO: ValueRef = 1;
-const VR_GEN_PERIODO: ValueRef = 2;
-const VR_GEN_ANCHO: ValueRef = 3;
-const VR_GEN_SALIDA: ValueRef = 5;
+// Generador (CS): time=0, t_pulso1..4 = 1..4, ancho_pulso=5, amplitud=6, salida=7
+const VR_GEN_T_PULSO1: ValueRef = 1;
+const VR_GEN_T_PULSO2: ValueRef = 2;
+const VR_GEN_T_PULSO3: ValueRef = 3;
+const VR_GEN_T_PULSO4: ValueRef = 4;
+const VR_GEN_ANCHO: ValueRef = 5;
+const VR_GEN_SALIDA: ValueRef = 7;
 // Semáforo (SE): time=0, boton=1, reloj=2, rojo=3, verde=4, t_restante=5
 const VR_SEM_BOTON: ValueRef = 1;
 const VR_SEM_RELOJ: ValueRef = 2;
@@ -187,7 +189,7 @@ const VR_SEM_ROJO: ValueRef = 3;
 const VR_SEM_VERDE: ValueRef = 4;
 
 const H: f64 = 0.5; // paso de comunicación del generador CS [s]
-const T_END: f64 = 130.0; // duración de la co-simulación [s]
+const T_END: f64 = 200.0; // duración de la co-simulación [s]
 const EPS: f64 = 1e-9;
 
 fn fase(rojo: f64, verde: f64) -> &'static str {
@@ -262,10 +264,14 @@ fn main() {
         assert!(!sem.is_null(), "no se pudo instanciar el semáforo (SE)");
 
         // ── 3. Inicialización ──────────────────────────────────────────────────
-        // Generador: pulso de 2 s cada 40 s, empezando a los 8 s (durante el primer rojo).
+        // Generador: 4 pulsaciones de 2 s en instantes elegidos para caer dentro de
+        // fases ROJAS y demostrar los tres comportamientos (acortar, cambio inmediato,
+        // y por contraste los ciclos sin botón que duran los 30 s completos).
         (gen_fmu.enter_init)(gen, false, 0.0, 0.0, true, T_END);
-        gen_fmu.set(gen, VR_GEN_T_INICIO, 8.0);
-        gen_fmu.set(gen, VR_GEN_PERIODO, 40.0);
+        gen_fmu.set(gen, VR_GEN_T_PULSO1, 8.0);
+        gen_fmu.set(gen, VR_GEN_T_PULSO2, 45.0);
+        gen_fmu.set(gen, VR_GEN_T_PULSO3, 95.0);
+        gen_fmu.set(gen, VR_GEN_T_PULSO4, 118.0);
         gen_fmu.set(gen, VR_GEN_ANCHO, 2.0);
         (gen_fmu.exit_init)(gen);
 

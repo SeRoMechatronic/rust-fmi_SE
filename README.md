@@ -123,7 +123,7 @@ por su ABI C real — el mismo rol que hará un orquestador externo.
 | `src/` (motor térmico) | Co-Simulation | Modelo continuo (calentamiento con la carga), generado con `#[derive(FmuModel)]`. |
 | `semaforo_se/` | Scheduled Execution | Semáforo aperiódico DEVS (rojo 60 s / verde 30 s, botón → 15 s) con reloj countdown. |
 | `semaforoV2_se/` | Scheduled Execution | Igual pero 30/15/20 s; incluye tutorial y simulador de ejemplo. |
-| `boton_pwm_cs/` | Co-Simulation | Generador de señal de botón: pulso único, PWM o escalón (parametrizable). |
+| `boton_pwm_cs/` | Co-Simulation | Generador de pulsaciones de botón en **instantes que eliges** (hasta 4). |
 | `acoplado_sim/` | — (orquestador) | Co-simula las dos FMUs juntas; referencia de cómo acoplar CS ↔ SE. |
 
 Para aprender a construir una FMU de SE desde cero, sigue
@@ -145,8 +145,7 @@ cd semaforoV2_se && cargo build && cd ..     # genera semaforoV2_se.dll
 cd acoplado_sim  && cargo run
 ```
 
-Traza real (semáforo 30/15 s, botón → rojo de 20 s en total; generador con pulso de 2 s
-cada 40 s desde t=8):
+Traza real (semáforo 30/15 s, botón → rojo de 20 s en total; pulsaciones en 8, 45, 95 y 118 s):
 
 ```text
   t (s) | fase    |  σ (s) | botón | evento
@@ -155,11 +154,16 @@ cada 40 s desde t=8):
     8.0 | 🔴 ROJO  |   12.0 |    1  | δext: 👆 BOTÓN pulsado     ← σ = 20-8
    20.0 | 🟢 VERDE |   15.0 |    0  | δint: fin de fase          ← rojo duró 20 s
    35.0 | 🔴 ROJO  |   30.0 |    0  | δint: fin de fase
-   48.0 | 🔴 ROJO  |    7.0 |    1  | δext: 👆 BOTÓN pulsado     ← σ = 20-13
+   45.0 | 🔴 ROJO  |   10.0 |    1  | δext: 👆 BOTÓN pulsado     ← σ = 20-10
    55.0 | 🟢 VERDE |   15.0 |    0  | δint: fin de fase          ← rojo duró 20 s
-  …
-  128.0 | 🔴 ROJO  |    0.0 |    1  | δext: 👆 BOTÓN pulsado     ← rojo ya llevaba 23 s
-  128.0 | 🟢 VERDE |   15.0 |    1  | δint: fin de fase          ← cambio INMEDIATO
+   70.0 | 🔴 ROJO  |   30.0 |    0  | δint: fin de fase
+   95.0 | 🔴 ROJO  |    0.0 |    1  | δext: 👆 BOTÓN pulsado     ← rojo ya llevaba 25 s
+   95.0 | 🟢 VERDE |   15.0 |    1  | δint: fin de fase          ← cambio INMEDIATO
+  110.0 | 🔴 ROJO  |   30.0 |    0  | δint: fin de fase
+  118.0 | 🔴 ROJO  |   12.0 |    1  | δext: 👆 BOTÓN pulsado     ← σ = 20-8
+  130.0 | 🟢 VERDE |   15.0 |    0  | δint: fin de fase          ← rojo duró 20 s
+  145.0 | 🔴 ROJO  |   30.0 |    0  | δint  (ya sin botón: 30 s completos)
+  175.0 | 🟢 VERDE |   15.0 |    0  | δint: fin de fase
 ```
 
 ### ⚠️ Las dos reglas críticas al acoplar CS con SE
@@ -175,6 +179,41 @@ Si vas a escribir tu propio orquestador, esto es lo que hay que respetar:
 
 Es decir, el planificador fusiona **dos fuentes de eventos**: el countdown del semáforo
 (δint) y los flancos de la entrada procedente del CS (δext).
+
+### Resultados (co-simulación de 300 s)
+
+![Co-simulación semáforo + botón](docs/cosim_semaforo.png)
+
+*(versión para tema oscuro: [`docs/cosim_semaforo_dark.png`](docs/cosim_semaforo_dark.png))*
+
+Con el generador configurado para pulsar en **t = 8, 45, 95 y 118 s** (las cuatro dentro
+de fases rojas), la traza demuestra los tres comportamientos del modelo:
+
+| # | Botón | El rojo llevaba | σ = 20 − transcurrido | Resultado |
+|---|---|---|---|---|
+| 1 | t=8 | 8 s | **12** | verde en t=20 → **rojo = 20 s** |
+| 2 | t=45 | 10 s | **10** | verde en t=55 → **rojo = 20 s** |
+| 3 | t=95 | 25 s ⚠️ | max(20−25,0) = **0** | **cambio inmediato** en el mismo instante |
+| 4 | t=118 | 8 s | **12** | verde en t=130 → **rojo = 20 s** |
+
+Y a partir de t=145 ya no hay pulsaciones: los rojos duran sus **30 s completos**, lo que
+sirve de control por contraste. Los verdes clavan **15 s** en todos los ciclos.
+
+**Sobre el panel de σ:** es una **escalera**, no una rampa. σ solo cambia cuando se activa
+la partición — entre eventos la FMU **no ejecuta ni una línea**. Ese escalonado es
+precisamente la evidencia de la eficiencia del enfoque aperiódico: el semáforo se despertó
+~20 veces en 300 s, en vez de 6000 (una por cada paso de 50 ms).
+
+> Si en una GUI ves *rampas* en lugar de escalones, es un artefacto de dibujo: los puntos
+> que llegan a la gráfica se unen con rectas cuando se pierden muestras. El CSV es la
+> fuente de verdad.
+
+Las gráficas se regeneran con:
+```bash
+python docs/plot_cosim.py docs/cosim_data.csv salida.png salida_dark.png
+```
+(`docs/cosim_data.csv` es la traza de referencia; el script comprueba además la
+separación de color bajo daltonismo antes de dibujar.)
 
 ### Nota: dos FMUs no se pueden enlazar en un mismo binario
 
